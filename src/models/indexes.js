@@ -1,0 +1,66 @@
+// Indexes chosen from the app's real query patterns (each line says which query it serves).
+// Declared on the schemas before connecting. In production autoIndex is off: run `npm run indexes` at deploy time.
+import { User } from './User.js';
+import { PointTransaction, CreatorEarning } from './Finance.js';
+import { Post, Message, Conversation, GiftTransaction } from './Social.js';
+import { Notification, Follow, Comment, Rating, Subscription, Promotion, MeetupBooking, ReferralReward, Payout, SpecialRequest, CommunityMember, VerificationRecord, Report, Story, WebhookLog, Community } from './Extra.js';
+import { AuditLog } from './Finance.js';
+
+export const INDEXES = [
+  [Post, { status: 1, communityId: 1, createdAt: -1, _id: -1 }, 'main feed: newest published, no community, cursor paging'],
+  [Post, { authorId: 1, status: 1, createdAt: -1 }, 'profile feed, creator Posts tab'],
+  [Post, { communityId: 1, status: 1, createdAt: -1 }, 'community feed'],
+  [Message, { conversationId: 1, createdAt: -1 }, 'open chat: newest N messages, load earlier'],
+  [Conversation, { participants: 1, lastMessageAt: -1 }, 'inbox list sorted by recent activity'],
+  [Notification, { recipientId: 1, createdAt: -1 }, 'notification history'],
+  [Notification, { recipientId: 1, read: 1 }, 'unread badge count'],
+  [PointTransaction, { userId: 1, createdAt: -1 }, 'wallet history'],
+  [PointTransaction, { userId: 1, type: 1, relatedId: 1, status: 1 }, 'has this user unlocked these posts (batched in the feed)'],
+  [PointTransaction, { relatedId: 1, type: 1, status: 1 }, 'does a post have buyers (delete policy)'],
+  [CreatorEarning, { creatorId: 1, status: 1, createdAt: -1 }, 'earnings summary and 7-day chart'],
+  [GiftTransaction, { recipientId: 1, status: 1, createdAt: -1 }, 'gift collection'],
+  [Rating, { creatorId: 1, status: 1, createdAt: -1 }, 'reviews list and averages'],
+  [Subscription, { creatorId: 1, status: 1, expiresAt: 1 }, 'active subscriber counts'],
+  [Subscription, { status: 1, expiresAt: 1 }, 'expiry job'],
+  [Promotion, { status: 1, expiresAt: 1 }, 'expiry job and discovery'],
+  [Promotion, { targetType: 1, targetId: 1, status: 1 }, 'is this post/profile/community sponsored'],
+  [MeetupBooking, { status: 1, expiresAt: 1 }, 'meetup expiry job'],
+  [MeetupBooking, { status: 1, releaseAfter: 1 }, 'meetup release job'],
+  [MeetupBooking, { creatorId: 1, createdAt: -1 }, 'creator booking list'],
+  [MeetupBooking, { userId: 1, createdAt: -1 }, 'my bookings'],
+  [Follow, { followeeId: 1, createdAt: -1 }, 'follower counts and audience list'],
+  [Comment, { postId: 1, createdAt: -1 }, 'comments on a post'],
+  [User, { accountMode: 1, category: 1, _id: -1 }, 'explore filtered by category'],
+  [User, { referredBy: 1 }, 'referral dashboard'],
+  [User, { creatorPlan: 1, proExpiresAt: 1 }, 'Pro expiry job'],
+  [User, { emailVerifyHash: 1 }, 'email verification lookup', { sparse: true }],
+  [User, { resetHash: 1 }, 'password reset lookup', { sparse: true }],
+  [ReferralReward, { status: 1, approveAfter: 1 }, 'referral approval job'],
+  [Payout, { creatorId: 1, createdAt: -1 }, 'creator payout history'],
+  [Payout, { status: 1, createdAt: -1 }, 'admin payout queue'],
+  [SpecialRequest, { creatorId: 1, createdAt: -1 }, 'received requests'],
+  [SpecialRequest, { userId: 1, createdAt: -1 }, 'sent requests'],
+  [CommunityMember, { userId: 1 }, 'my communities'],
+  [VerificationRecord, { userId: 1, status: 1, createdAt: -1 }, 'latest verification and daily failure count'],
+  [VerificationRecord, { status: 1, createdAt: 1 }, 'admin verification queue'],
+  [Post, { tags: 1, createdAt: -1 }, 'topic pages and trending topics'],
+  [Post, { authorId: 1, pinnedAt: 1 }, 'pinned posts on a profile'],
+  [Post, { 'moderation.status': 1, createdAt: -1 }, 'admin moderation queue'],
+  [Comment, { postId: 1, parentId: 1, createdAt: -1 }, 'threaded comments'],
+  [Story, { authorId: 1, expiresAt: 1 }, 'active statuses per person'],
+  [Story, { expiresAt: 1 }, 'status expiry + cleanup after 7 days', { expireAfterSeconds: 7 * 86400 }],
+  [Report, { status: 1, createdAt: 1 }, 'admin report queue'],
+  [Report, { targetType: 1, targetId: 1 }, 'reports about one item'],
+  [AuditLog, { createdAt: -1 }, 'audit log newest first'],
+  [AuditLog, { target: 1, createdAt: -1 }, 'history for one record'],
+  [AuditLog, { action: 1, createdAt: -1 }, 'audit filter by action'],
+  [WebhookLog, { ok: 1, createdAt: -1 }, 'failed webhook monitoring'],
+  [WebhookLog, { reference: 1 }, 'webhook events for a payment'],
+  [PointTransaction, { type: 1, status: 1, completedAt: -1 }, 'admin revenue and volume reports'],
+  [PointTransaction, { creatorId: 1, type: 1, status: 1 }, 'creator supporter analytics'],
+  [User, { accountMode: 1, creatorSince: -1 }, 'creator list and activation stats'],
+  [User, { accountStatus: 1 }, 'restricted/suspended filters'],
+  [Community, { visibility: 1, memberCount: -1 }, 'popular communities'],
+];
+for (const [Model, spec, , opts] of INDEXES) Model.schema.index(spec, opts || {});
+export const MODELS = [...new Set(INDEXES.map(([m]) => m))];
