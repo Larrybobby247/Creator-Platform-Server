@@ -15,7 +15,14 @@ import { sendEmail } from '../services/push.js';
 export const TERMS_VERSION = '2026-10';
 const r = Router();
 const sign = (u) => jwt.sign({ sub: u.id }, env.jwtSecret, { expiresIn: '7d' });
-const cookie = { httpOnly: true, sameSite: 'lax', secure: env.prod, maxAge: 7 * 864e5 };
+const cookie = {
+  httpOnly: true,
+  sameSite: env.prod ? 'none' : 'lax',
+  secure: env.prod,
+  maxAge: 8 * 3600e3,
+  path: '/'
+};
+
 export const pub = (u) => ({ id: u.id, username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl, accountMode: u.accountMode, creatorPlan: u.creatorPlan, role: u.role, referralCode: u.referralCode });
 
 async function createUser({ username, email, passwordHash, ref, googleId, displayName, gender, age, emailVerified = false }) {
