@@ -11,7 +11,14 @@ import { audit } from '../../services/audit.js';
 
 const r = Router();
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, handler: (_q, res) => res.status(429).json({ error: 'Too many sign-in attempts. Try again in 15 minutes.', code: 'RATE_LIMITED' }) });
-const cookie = { httpOnly: true, sameSite: 'strict', secure: env.prod, maxAge: 8 * 3600e3, path: '/' };
+const cookie = {
+  httpOnly: true,
+  sameSite: env.prod ? 'none' : 'lax',
+  secure: env.prod,
+  maxAge: 8 * 3600e3,
+  path: '/'
+};
+
 const DUMMY = bcrypt.hashSync('not-a-real-password', 10); // equalises timing for unknown emails
 export const me = (u, perms) => ({ id: u.id, name: u.displayName || u.username, username: u.username, email: u.email, role: u.adminRole, avatarUrl: u.avatarUrl, permissions: [...perms] });
 
