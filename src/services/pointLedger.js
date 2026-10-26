@@ -19,10 +19,10 @@ async function insertTx(doc) {
 export async function spend({ userId, type, amount, idempotencyKey, creatorId, relatedId, meta }) {
   if (!Number.isInteger(amount) || amount <= 0) throw new ApiError(400, 'Invalid amount');
   if (!idempotencyKey) throw new ApiError(400, 'idempotencyKey required');
-  const { tx, duplicate } = await insertTx({
-    reference: ref('TX'), userId, type, direction: 'DEBIT', amount, idempotencyKey, creatorId, relatedId, meta,
-    nairaPerPointAtTime: await getSetting('nairaPerPoint'),
-  });
+  const doc = { reference: ref('TX'), userId, type, direction: 'DEBIT', amount, idempotencyKey, creatorId, relatedId, meta, nairaPerPointAtTime: await getSetting('nairaPerPoint') };
+  let { tx, duplicate } = await insertTx(doc);
+  // An earlier attempt that failed for lack of points must not block a retry after the user tops up.
+  if (duplicate && tx?.status === 'FAILED') { await PointTransaction.deleteOne({ _id: tx._id, status: 'FAILED' }); ({ tx, duplicate } = await insertTx({ ...doc, reference: ref('TX') })); }
   if (duplicate) return { tx, duplicate };
   const w = await Wallet.findOneAndUpdate({ userId, availablePoints: { $gte: amount } }, { $inc: { availablePoints: -amount } }, { new: true });
   if (!w) { tx.status = 'FAILED'; await tx.save(); throw new ApiError(402, 'Insufficient points', 'INSUFFICIENT_POINTS'); }

@@ -1,7 +1,5 @@
 import { spawn } from 'child_process';
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 import { env } from '../config/env.js';
 import { ApiError } from '../utils/ApiError.js';
 import { getSetting } from './settings.js';
@@ -30,12 +28,7 @@ export async function assertVideoAllowed(file, plan, maxOverride) {
   if (dur > max + 0.25) throw new ApiError(422, `Video is ${Math.round(dur)}s. Your plan allows up to ${max}s.`, 'VIDEO_TOO_LONG');
   return dur;
 }
-export function storePrivate(tmpPath, ext) {
-  fs.mkdirSync(env.mediaDir, { recursive: true });
-  const key = `${crypto.randomBytes(16).toString('hex')}${ext}`;
-  fs.copyFileSync(tmpPath, path.join(env.mediaDir, key)); fs.unlinkSync(tmpPath);
-  return key;
-}
+export { storePrivate } from './storage.js'; // Cloudinary (authenticated) in production, local private folder as dev fallback
 export const signUrl = (assetId, userId, ttlSec = 300) => {
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
   const sig = crypto.createHmac('sha256', env.mediaSecret).update(`${assetId}.${userId}.${exp}`).digest('hex');

@@ -5,9 +5,15 @@ import { getSetting } from './settings.js';
 import { splitCommission } from '../utils/money.js';
 import { notify } from './notify.js';
 
+// Pro creators (active plan) pay the lower commission (default 15% instead of 20%). Rate is locked into each earning row when it is created.
+export async function commissionFor(creatorId) {
+  const u = await User.findById(creatorId).select('creatorPlan proExpiresAt').lean();
+  const pro = u?.creatorPlan === 'PRO' && (!u.proExpiresAt || new Date(u.proExpiresAt) > new Date());
+  return getSetting(pro ? 'proCommissionBps' : 'commissionBps');
+}
 /** The single place creator earnings are created (gifts, unlocks, subscriptions, requests, meetups, communities). */
 export async function recordEarning({ creatorId, sourceTx, gross, status = 'AVAILABLE', label = 'sale' }) {
-  const { commission, net } = splitCommission(gross, await getSetting('commissionBps'));
+  const { commission, net } = splitCommission(gross, await commissionFor(creatorId));
   const e = await CreatorEarning.create({ creatorId, sourceTransactionId: sourceTx._id, gross, commission, net, status, releasedAt: status === 'AVAILABLE' ? new Date() : undefined });
   if (status === 'AVAILABLE') await notify(creatorId, 'EARNING', `New ${label}: +${net} pts earned`, '/studio');
   await maybeReferral(creatorId, sourceTx._id, net);

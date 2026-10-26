@@ -27,3 +27,7 @@ export const createRecipient = ({ name, accountNumber, bankCode }) =>
   call('/transferrecipient', { method: 'POST', body: JSON.stringify({ type: 'nuban', name, account_number: accountNumber, bank_code: bankCode, currency: 'NGN' }) });
 export const transfer = ({ amountKobo, recipient, reference, reason }) =>
   call('/transfer', { method: 'POST', body: JSON.stringify({ source: 'balance', amount: amountKobo, recipient, reference, reason }) });
+
+// Looks up the account holder's name from the bank (Paystack "resolve account"). The creator must confirm it before the account is saved.
+export const resolveAccount = ({ accountNumber, bankCode }) =>
+  call(`/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`);
