@@ -21,6 +21,12 @@ const s = new mongoose.Schema({
   adminRole: { type: String, enum: ['SUPER_ADMIN', 'FINANCE', 'MODERATOR', 'SUPPORT', 'VERIFICATION'] }, adminPermissions: [String],
   adminNotes: [{ text: String, by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, at: Date }],
   proExpiresAt: Date, profileViews: { type: Number, default: 0 },
+  // Creator application (private: legal name / date of birth / phone are for verification only and are never returned by public endpoints)
+  creatorApplication: { type: new mongoose.Schema({ legalName: String, dob: Date, phone: String, country: { type: String, default: 'Nigeria' }, contentCategory: String, guidelinesAcceptedAt: Date, guidelinesVersion: String, submittedAt: Date }, { _id: false }), select: false },
+  // Which paid features the creator switched on. Each can be turned on later; none is forced. { key: { enabled, pricePoints? } }
+  services: { type: mongoose.Schema.Types.Mixed, default: {} },
+  // Verified payout bank account. The full number goes only to the payment provider; we keep the last 4 digits and the provider's recipient code.
+  payoutAccount: { bankName: String, bankCode: String, accountLast4: String, accountName: String, recipientCode: String, verifiedAt: Date },
   showGiftSenders: { type: Boolean, default: false },
   referralCode: { type: String, unique: true, sparse: true },
   referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
