@@ -30,7 +30,7 @@ r.post('/', multer({ dest: os.tmpdir() }).single('file'), asyncHandler(async (re
     if (f) {
       const kind = MIME[f.mimetype]; if (!kind) throw new ApiError(415, 'Use a JPG/PNG/WebP image or an MP4/WebM video'); if (f.size > (await getSetting('maxUploadBytes'))) throw new ApiError(413, 'File too large');
       type = kind[0]; const durationSec = type === 'VIDEO' ? await assertVideoAllowed(f.path, req.user.creatorPlan) : undefined;
-      const a = await MediaAsset.create({ ownerId: req.user._id, storageKey: storePrivate(f.path, kind[1]), mediaType: type, mimeType: f.mimetype, size: f.size, durationSec }); mediaId = a._id;
+      const a = await MediaAsset.create({ ownerId: req.user._id, storageKey: await storePrivate(f.path, kind[1]), mediaType: type, mimeType: f.mimetype, size: f.size, durationSec }); mediaId = a._id;
     } else if (!b.text?.trim()) throw new ApiError(400, 'Add a photo, a video or some text');
     const s = await Story.create({ authorId: req.user._id, type, text: b.text?.trim(), bg: b.bg || 'violet', mediaId, expiresAt: new Date(Date.now() + TTL) });
     res.status(201).json({ story: s });

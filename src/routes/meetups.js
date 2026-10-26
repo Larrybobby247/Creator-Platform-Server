@@ -34,7 +34,7 @@ export async function releaseBooking(b) {
 r.post('/', asyncHandler(async (req, res) => {
   const b = z.object({ creatorId: z.string(), slotAt: z.coerce.date(), idempotencyKey: z.string().min(8) }).parse(req.body);
   const c = await User.findOne({ _id: b.creatorId, accountMode: 'CREATOR' });
-  if (!c || c.id === req.user.id || !c.meetup?.enabled) throw new ApiError(400, 'Meetups are not available for this creator');
+  if (!c || c.id === req.user.id || !c.meetup?.enabled) throw new ApiError(400, 'Innercircle is not available for this creator');
   if (!(await isIdentityVerified(c._id))) throw new ApiError(403, 'Creator is not verified'); // re-checked at booking time
   if (b.slotAt.getTime() < Date.now() + c.meetup.noticeHours * 36e5) throw new ApiError(400, `Needs at least ${c.meetup.noticeHours}h notice`);
   const booking = await MeetupBooking.create({ userId: req.user._id, creatorId: c._id, slotAt: b.slotAt, durationMin: c.meetup.durationMin, area: c.meetup.area, feePoints: c.meetup.pricePoints, transportPoints: c.meetup.transportPoints, history: [{ status: 'REQUESTED', at: new Date(), by: req.user._id }] });
@@ -46,7 +46,7 @@ r.post('/', asyncHandler(async (req, res) => {
     await booking.save();
   } catch (e) { await refundBooking(booking, { includeTransport: true }); await booking.deleteOne(); throw e; }
   const out = await transition(booking._id, ['REQUESTED'], 'PAID_AND_RESERVED', {}, req.user._id);
-  await notify(c._id, 'MEETUP', `New meetup request from ${req.user.username}`, '/studio');
+  await notify(c._id, 'MEETUP', `New Innercircle request from ${req.user.username}`, '/studio');
   res.status(201).json(out);
 }));
 
@@ -69,13 +69,13 @@ r.post('/:id/:action', asyncHandler(async (req, res) => {
     case 'reject': need(isCreator); out = await transition(id, ['PAID_AND_RESERVED', 'CREATOR_ACCEPTED'], 'REJECTED', {}, me); if (out) await refundBooking(bk, { includeTransport: true }); break;
     case 'user-accept': need(!isCreator); out = await transition(id, ['MEETUP_PENDING_USER_ACCEPTANCE'], 'USER_ACCEPTED', { userAcceptedAt: new Date() }, me); break;
     case 'cancel': need(!isCreator); out = await transition(id, ['PAID_AND_RESERVED', 'CREATOR_ACCEPTED', 'MEETUP_PENDING_USER_ACCEPTANCE'], 'CANCELLED', {}, me); if (out) await refundBooking(bk, { includeTransport: false }); break; // transport kept per cancellation rule (confirm policy)
-    case 'complete': need(isCreator); if (bk.slotAt > new Date()) throw new ApiError(400, 'Meetup time has not passed yet');
+    case 'complete': need(isCreator); if (bk.slotAt > new Date()) throw new ApiError(400, 'The booking time has not passed yet');
       out = await transition(id, ['USER_ACCEPTED'], 'COMPLETED', { completedAt: new Date(), releaseAfter: new Date(Date.now() + (await getSetting('meetupDisputeHours')) * 36e5) }, me); break;
     case 'dispute': need(!isCreator); out = await transition(id, ['USER_ACCEPTED', 'COMPLETED'], 'DISPUTED', {}, me); break;
     default: throw new ApiError(404, 'Unknown action');
   }
   if (!out) throw new ApiError(409, `Cannot ${action} from status ${bk.status}`);
-  await notify(OTHER(bk, me), 'MEETUP', `Meetup is now ${out.status.replaceAll('_', ' ').toLowerCase()}`, '/meetups');
+  await notify(OTHER(bk, me), 'MEETUP', `Innercircle booking is now ${out.status.replaceAll('_', ' ').toLowerCase()}`, '/meetups');
   res.json(out);
 }));
 export default r;

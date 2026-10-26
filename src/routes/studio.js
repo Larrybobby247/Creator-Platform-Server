@@ -46,27 +46,45 @@ r.get('/analytics', requireCreator, asyncHandler(async (req, res) => {
   res.json({ days, profileViews: views, followers, subscribers, giftsReceived: gifts, activePromotions: promos, meetupBookings: bookings, rating: rt[0] ? { avg: Math.round(rt[0].avg * 10) / 10, count: rt[0].n } : null });
 }));
 
-// ---- payouts (records + admin processing; no automated bank transfer is integrated)
+// ---- payouts ----
+// Flow: earnings are confirmed by the payment provider -> backend takes the platform fee -> net amount becomes available ->
+// creator saves a VERIFIED bank account once -> enters an amount -> we validate and record the request -> funds arrive in 24 to 48 hours ->
+// the creator is notified when the transfer succeeds or fails.
+import { listBanks, resolveName, saveVerifiedAccount, maskedAccount } from '../services/bank.js';
+import rateLimit from 'express-rate-limit';
+const lookupLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const lagosDayStart = () => { const d = new Date(Date.now() + 3600e3); d.setUTCHours(0, 0, 0, 0); return new Date(d.getTime() - 3600e3); }; // midnight in Africa/Lagos (UTC+1, no DST)
+const payoutToday = (creatorId) => Payout.findOne({ creatorId, createdAt: { $gte: lagosDayStart() }, status: { $nin: ['FAILED', 'REVERSED'] } }).select('createdAt').lean();
+export const PAYOUT_ETA = 'Money is sent to your bank account within 24 to 48 hours.';
+
 r.get('/payouts', requireCreator, asyncHandler(async (req, res) => res.json({ items: await Payout.find({ creatorId: req.user._id }).sort('-createdAt').limit(50) })));
+r.get('/payout-info', requireCreator, asyncHandler(async (req, res) => {
+  const t = await payoutToday(req.user._id);
+  res.json({ account: maskedAccount(req.user), requestedToday: !!t, nextAt: t ? new Date(lagosDayStart().getTime() + 864e5) : null, minPayoutPoints: await getSetting('minPayoutPoints'), eta: PAYOUT_ETA });
+}));
+r.get('/banks', requireCreator, asyncHandler(async (_q, res) => res.json(await listBanks())));
+// Step 1: ask the bank who owns the account. Step 2: the creator confirms the name, then we save it.
+r.post('/payout-account/verify', requireCreator, lookupLimit, asyncHandler(async (req, res) => {
+  const b = z.object({ accountNumber: z.string().regex(/^\d{10}$/, 'An account number has 10 digits'), bankCode: z.string().min(1).max(10) }).parse(req.body);
+  res.json({ accountName: await resolveName(b) });
+}));
+r.post('/payout-account', requireCreator, lookupLimit, asyncHandler(async (req, res) => {
+  const b = z.object({ bankCode: z.string().min(1), bankName: z.string().min(2).max(80), accountNumber: z.string().regex(/^\d{10}$/), confirmedName: z.string().min(2).max(120) }).parse(req.body);
+  res.json({ account: await saveVerifiedAccount(req.user, b) });
+}));
 r.post('/payouts', requireCreator, asyncHandler(async (req, res) => {
-  const b = z.object({ amountPoints: z.number().int().positive(), bankName: z.string().min(2).max(60), bankCode: z.string().max(10).optional(), accountNumber: z.string().regex(/^\d{10}$/), accountName: z.string().min(2).max(80) }).parse(req.body);
+  const b = z.object({ amountPoints: z.number().int().positive() }).parse(req.body);
+  const acct = req.user.payoutAccount; if (!acct?.accountLast4) throw new ApiError(400, 'Add and verify a bank account first.', 'NO_BANK_ACCOUNT');
+  if (env.paymentProvider === 'paystack' && !acct.recipientCode) throw new ApiError(400, 'Please re-add your bank account.', 'NO_BANK_ACCOUNT');
   const min = await getSetting('minPayoutPoints'); if (b.amountPoints < min) throw new ApiError(400, `Minimum withdrawal is ${min} points`);
+  if (await payoutToday(req.user._id)) throw new ApiError(429, 'You can only request one withdrawal per day. Please try again tomorrow.', 'PAYOUT_DAILY_LIMIT');
   const { availableToWithdraw, nairaPerPoint } = await earningsSummary(req.user._id);
-  if (b.amountPoints > availableToWithdraw) throw new ApiError(400, 'Amount exceeds available earnings');
-  // The full account number goes only to the payout provider (to create a recipient). We keep the last 4 digits and the provider's recipient code.
-  let recipientCode;
-  if (env.paymentProvider === 'paystack') {
-    if (!b.bankCode) throw new ApiError(400, 'Choose your bank');
-    recipientCode = (await provider.createRecipient({ name: b.accountName, accountNumber: b.accountNumber, bankCode: b.bankCode })).recipient_code;
-  }
-  const p = await Payout.create({ creatorId: req.user._id, amountPoints: b.amountPoints, nairaAmount: b.amountPoints * nairaPerPoint, bankName: b.bankName, accountLast4: b.accountNumber.slice(-4), accountName: b.accountName, recipientCode, reference: `PO_${crypto.randomBytes(8).toString('hex')}` });
-  res.status(201).json(p);
+  if (b.amountPoints > availableToWithdraw) throw new ApiError(400, 'Amount exceeds your available earnings');
+  const p = await Payout.create({ creatorId: req.user._id, amountPoints: b.amountPoints, nairaAmount: b.amountPoints * nairaPerPoint, bankName: acct.bankName, accountLast4: acct.accountLast4, accountName: acct.accountName, recipientCode: acct.recipientCode, reference: `PO_${crypto.randomBytes(8).toString('hex')}` });
+  await notify(req.user._id, 'PAYOUT', `Withdrawal of ₦${p.nairaAmount.toLocaleString('en-NG')} requested. ${PAYOUT_ETA}`, '/studio');
+  res.status(201).json({ payout: p, message: PAYOUT_ETA });
 }));
 
-r.get('/banks', requireCreator, asyncHandler(async (_q, res) => {
-  if (env.paymentProvider !== 'paystack') return res.json({ banks: [{ name: 'Test Bank (dev)', code: '000' }], dev: true });
-  res.json({ banks: (await provider.listBanks()).map((b) => ({ name: b.name, code: b.code })) });
-}));
 r.get('/audience', requireCreator, asyncHandler(async (req, res) => {
   const [f, s] = await Promise.all([Follow.find({ followeeId: req.user._id }).sort('-createdAt').limit(50).populate('followerId', 'username displayName avatarUrl').lean(), Subscription.find({ creatorId: req.user._id }).sort('-createdAt').limit(50).populate('subscriberId', 'username displayName avatarUrl').lean()]);
   res.json({ followers: f.map((x) => x.followerId), subscribers: s.map((x) => ({ user: x.subscriberId, status: x.status, expiresAt: x.expiresAt })) });

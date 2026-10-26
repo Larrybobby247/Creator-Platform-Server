@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { User } from '../models/User.js';
-import { Post, Conversation } from '../models/Social.js';
+import { Post, Conversation, MediaAsset } from '../models/Social.js';
+import { resolveMentions, notifyMentions } from '../services/mentions.js';
 import { PointTransaction } from '../models/Finance.js';
 import { Subscription, Community, CommunityMember, SpecialRequest, Rating, Promotion, Notification, MeetupBooking } from '../models/Extra.js';
 import { authenticate } from '../middleware/authenticate.js';
@@ -57,6 +58,7 @@ r.get('/communities', asyncHandler(async (req, res) => {
 r.post('/communities', asyncHandler(async (req, res) => {
   const b = z.object({ name: z.string().min(3).max(40), description: z.string().max(400).optional(), visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PUBLIC'), accessFeePoints: z.number().int().min(0).default(0), rules: z.string().max(800).optional() }).parse(req.body);
   if (b.accessFeePoints > 0 && req.user.accountMode !== 'CREATOR') throw new ApiError(403, 'Only creators can charge for communities');
+  if (b.accessFeePoints > 0 && req.user.services?.paidCommunities?.enabled === false) throw new ApiError(403, 'Paid communities are switched off. Turn them on in Settings → Creator services.', 'SERVICE_OFF');
   const c = await Community.create({ ...b, ownerId: req.user._id }).catch((e) => { if (e.code === 11000) throw new ApiError(409, 'Name taken'); throw e; });
   await CommunityMember.create({ communityId: c._id, userId: req.user._id });
   res.status(201).json(c);
@@ -105,7 +107,7 @@ r.post('/requests/:id/:action', asyncHandler(async (req, res) => {
   res.json(sr);
 }));
 
-// ---- ratings: only after a COMPLETED special request or meetup, once per qualifying transaction
+// ---- ratings: only after a COMPLETED special request or Innercircle booking, once per qualifying transaction
 r.post('/creators/:id/ratings', asyncHandler(async (req, res) => {
   const b = z.object({ qualifyingId: z.string(), stars: z.number().int().min(1).max(5), text: z.string().max(1000).optional() }).parse(req.body);
   const sr = await SpecialRequest.findOne({ _id: b.qualifyingId, userId: req.user._id, creatorId: req.params.id, status: 'COMPLETED' });
@@ -125,7 +127,7 @@ r.post('/ratings/:id/report', asyncHandler(async (req, res) => { await Rating.up
 r.get('/ratings/eligible/:creatorId', asyncHandler(async (req, res) => {
   const rated = new Set((await Rating.find({ reviewerId: req.user._id, creatorId: req.params.creatorId })).map((x) => String(x.qualifyingId)));
   const [a, b] = await Promise.all([SpecialRequest.find({ userId: req.user._id, creatorId: req.params.creatorId, status: 'COMPLETED' }), MeetupBooking.find({ userId: req.user._id, creatorId: req.params.creatorId, status: { $in: ['COMPLETED', 'EARNINGS_RELEASED'] } })]);
-  res.json({ items: [...a.map((x) => ({ id: x.id, kind: 'Special request' })), ...b.map((x) => ({ id: x.id, kind: 'Meetup' }))].filter((x) => !rated.has(x.id)) });
+  res.json({ items: [...a.map((x) => ({ id: x.id, kind: 'Special request' })), ...b.map((x) => ({ id: x.id, kind: 'Innercircle' }))].filter((x) => !rated.has(x.id)) });
 }));
 
 // ---- promotions
@@ -133,6 +135,7 @@ const DUR = { DAY1: 864e5, DAY3: 3 * 864e5, DAY7: 7 * 864e5 };
 r.get('/promotions/prices', asyncHandler(async (_q, res) => res.json(await getSetting('promoPrices'))));
 r.post('/promotions', asyncHandler(async (req, res) => {
   const b = z.object({ targetType: z.enum(['POST', 'PROFILE', 'COMMUNITY']), targetId: z.string().optional(), duration: z.enum(['DAY1', 'DAY3', 'DAY7']), idempotencyKey: z.string().min(8) }).parse(req.body);
+  if (req.user.services?.promotions?.enabled === false) throw new ApiError(403, 'Promotions are switched off. Turn them on in Settings → Creator services.', 'SERVICE_OFF');
   let targetId = b.targetId;
   if (b.targetType === 'PROFILE') targetId = req.user.id;
   else if (b.targetType === 'POST') { if (!(await Post.exists({ _id: targetId, authorId: req.user._id, access: 'PUBLIC', status: 'PUBLISHED' }))) throw new ApiError(403, 'Only your own public posts can be promoted'); }
@@ -165,14 +168,30 @@ r.get('/communities/:id', asyncHandler(async (req, res) => {
   res.json({ community: c, member, owner: String(c.ownerId._id) === req.user.id, members: members.map((m) => m.userId) });
 }));
 r.patch('/communities/:id', asyncHandler(async (req, res) => {
-  const b = z.object({ description: z.string().max(400).optional(), rules: z.string().max(800).optional(), accessFeePoints: z.number().int().min(0).optional() }).parse(req.body);
+  const b = z.object({ description: z.string().max(400).optional(), rules: z.string().max(800).optional(), accessFeePoints: z.number().int().min(0).optional(), allowPosting: z.boolean().optional(), allowMedia: z.boolean().optional() }).parse(req.body);
   if (b.accessFeePoints > 0 && req.user.accountMode !== 'CREATOR') throw new ApiError(403, 'Only creators can charge for communities');
   const c = await Community.findOneAndUpdate({ _id: req.params.id, ownerId: req.user._id }, b, { new: true }); if (!c) throw new ApiError(404, 'Not found'); res.json(c);
 }));
 r.post('/communities/:id/posts', asyncHandler(async (req, res) => {
-  const { content } = z.object({ content: z.string().min(1).max(2000) }).parse(req.body);
-  if (!(await CommunityMember.exists({ communityId: req.params.id, userId: req.user._id }))) throw new ApiError(403, 'Join first');
-  res.status(201).json(await Post.create({ authorId: req.user._id, content, communityId: req.params.id, access: 'PUBLIC', status: 'PUBLISHED' }));
+  assertCanInteract(req.user);
+  const b = z.object({ content: z.string().max(2000).default(''), mediaIds: z.array(z.string()).max(4).default([]) }).parse(req.body);
+  if (!b.content.trim() && !b.mediaIds.length) throw new ApiError(400, 'Write something or add a photo or video');
+  const c = await Community.findById(req.params.id); if (!c || c.status === 'RESTRICTED') throw new ApiError(404, 'Not found');
+  if (!(await CommunityMember.exists({ communityId: c._id, userId: req.user._id }))) throw new ApiError(403, 'Join first');
+  const owner = String(c.ownerId) === req.user.id;
+  if (c.allowPosting === false && !owner) throw new ApiError(403, 'The owner has turned off posting in this community.', 'POSTING_OFF');
+  let media = [];
+  if (b.mediaIds.length) {
+    if (c.allowMedia === false && !owner) throw new ApiError(403, 'The owner has turned off photos and videos in this community.', 'MEDIA_OFF');
+    const assets = await MediaAsset.find({ _id: { $in: b.mediaIds.filter(oidOk) }, ownerId: req.user._id }).lean();
+    if (assets.length !== b.mediaIds.length) throw new ApiError(403, 'Not your media');
+    if (assets.some((a) => !['IMAGE', 'VIDEO'].includes(a.mediaType)) || assets.filter((a) => a.mediaType === 'VIDEO').length > 2) throw new ApiError(400, 'Up to 4 items, at most 2 videos');
+    media = b.mediaIds.map((id) => { const a = assets.find((x) => String(x._id) === id); return { mediaId: a._id, mediaType: a.mediaType, access: 'PUBLIC', pricePoints: 0, durationSec: a.durationSec }; }); // community media is always free to members
+  }
+  const mentions = await resolveMentions(b.content, req.user._id);
+  const post = await Post.create({ authorId: req.user._id, content: b.content, media, mentions, mediaTypeHint: media[0]?.mediaType, communityId: c._id, access: 'PUBLIC', status: 'PUBLISHED' });
+  await notifyMentions(mentions, req.user, `in ${c.name}`, `/communities/${c.id}`);
+  res.status(201).json(post);
 }));
 r.delete('/communities/:id/posts/:postId', asyncHandler(async (req, res) => {
   const c = await Community.findById(req.params.id); const p = await Post.findOne({ _id: req.params.postId, communityId: req.params.id });

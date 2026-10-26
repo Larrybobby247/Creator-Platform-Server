@@ -9,6 +9,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { assertCanInteract } from '../utils/restrict.js';
 import { notify } from '../services/notify.js';
+import { resolveMentions, notifyMentions } from '../services/mentions.js';
 
 const r = Router();
 r.use(authenticate);
@@ -21,8 +22,10 @@ const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan subscript
 // All lookups run once for the whole page (no per-post queries) and concurrently.
 export async function shape(posts, me) {
   const ids = posts.map((p) => p._id);
-  const exclusiveIds = posts.filter((p) => p.access === 'EXCLUSIVE').map((p) => p._id);
-  const subAuthors = [...new Set(posts.filter((p) => p.access === 'SUBSCRIBERS').map((p) => String(p.authorId._id || p.authorId)))];
+  const authorOf = (p) => String(p.authorId._id || p.authorId);
+  const has = (p, access) => p.access === access || p.media?.some((m) => m.access === access);
+  const gatedIds = posts.filter((p) => has(p, 'EXCLUSIVE')).map((p) => p._id);
+  const subAuthors = [...new Set(posts.filter((p) => has(p, 'SUBSCRIBERS')).map(authorOf))];
   const [likes, mine, comments, follows, promos, assets, unlocked, subs] = await Promise.all([
     Like.aggregate([{ $match: { postId: { $in: ids } } }, { $group: { _id: '$postId', n: { $sum: 1 } } }]),
     Like.find({ postId: { $in: ids }, userId: me._id }).select('postId').lean(),
@@ -30,22 +33,32 @@ export async function shape(posts, me) {
     Follow.find({ followerId: me._id, followeeId: { $in: posts.map((p) => p.authorId._id || p.authorId) } }).select('followeeId').lean(),
     Promotion.find({ targetType: 'POST', targetId: { $in: ids }, status: 'ACTIVE', expiresAt: { $gt: new Date() } }).select('targetId').lean(),
     MediaAsset.find({ _id: { $in: posts.map((p) => p.mediaId).filter(Boolean) } }).select('mediaType durationSec').lean(),
-    exclusiveIds.length ? PointTransaction.find({ userId: me._id, type: 'EXCLUSIVE_CONTENT_UNLOCK', relatedId: { $in: exclusiveIds }, status: 'COMPLETED' }).select('relatedId').lean() : [],
+    gatedIds.length ? PointTransaction.find({ userId: me._id, type: 'EXCLUSIVE_CONTENT_UNLOCK', relatedId: { $in: gatedIds }, status: 'COMPLETED' }).select('relatedId meta').lean() : [],
     subAuthors.length ? Subscription.find({ subscriberId: me._id, creatorId: { $in: subAuthors }, status: 'ACTIVE', expiresAt: { $gt: new Date() } }).select('creatorId').lean() : [],
   ]);
   const L = Object.fromEntries(likes.map((x) => [String(x._id), x.n])), C = Object.fromEntries(comments.map((x) => [String(x._id), x.n]));
   const M = new Set(mine.map((x) => String(x.postId))), F = new Set(follows.map((x) => String(x.followeeId))), P = new Set(promos.map((x) => String(x.targetId)));
-  const A = Object.fromEntries(assets.map((a) => [String(a._id), a])), U = new Set(unlocked.map((x) => String(x.relatedId))), S = new Set(subs.map((x) => String(x.creatorId)));
+  const A = Object.fromEntries(assets.map((a) => [String(a._id), a])), S = new Set(subs.map((x) => String(x.creatorId)));
+  const U = new Map(); for (const t of unlocked) { const k = String(t.relatedId); if (!U.has(k)) U.set(k, new Set()); U.get(k).add(t.meta?.idx ?? 'all'); } // 'all' = legacy whole-post unlock
   return posts.map((p) => {
-    const author = String(p.authorId._id || p.authorId);
-    const ok = p.access === 'PUBLIC' || author === String(me._id) || (p.access === 'EXCLUSIVE' && U.has(String(p._id))) || (p.access === 'SUBSCRIBERS' && S.has(author));
+    const author = authorOf(p); const own = author === String(me._id); const open = U.get(String(p._id));
     const o = { ...p, hasPreview: !!p.previewMediaId, pinned: !!p.pinnedAt };
     if (p.communityId?.name) { o.community = { _id: p.communityId._id, name: p.communityId.name }; o.communityId = p.communityId._id; }
-    if (p.mediaId) { o.mediaType = A[String(p.mediaId)]?.mediaType; o.durationSec = A[String(p.mediaId)]?.durationSec; }
     if (author !== String(me._id)) delete o.viewCount;
-    delete o.moderation;
-    if (!ok) { delete o.exclusiveText; delete o.mediaId; delete o.previewMediaId; if (p.access === 'EXCLUSIVE') delete o.content; }
-    return { ...o, locked: !ok, likeCount: L[String(p._id)] || 0, liked: M.has(String(p._id)), commentCount: C[String(p._id)] || 0, following: F.has(author), sponsored: P.has(String(p._id)) };
+    delete o.moderation; delete o.mentions;
+    let locked = false;
+    if (p.media?.length) { // ---- new style: each item has its own access; the caption is always public
+      o.items = p.media.map((m, idx) => ({ idx, mediaType: m.mediaType, access: m.access, pricePoints: m.pricePoints, durationSec: m.durationSec,
+        locked: !(m.access === 'PUBLIC' || own || (m.access === 'EXCLUSIVE' && (open?.has(idx) || open?.has('all'))) || (m.access === 'SUBSCRIBERS' && S.has(author))) }));
+      o.mediaType = p.media[0].mediaType; delete o.media;
+      if (!own && !o.items.some((i) => i.access !== 'PUBLIC' && !i.locked)) delete o.exclusiveText;
+    } else { // ---- legacy: one optional media file, post-level access
+      const ok = p.access === 'PUBLIC' || own || (p.access === 'EXCLUSIVE' && (open?.has('all'))) || (p.access === 'SUBSCRIBERS' && S.has(author));
+      locked = !ok;
+      if (p.mediaId) { const a = A[String(p.mediaId)]; o.mediaType = a?.mediaType; o.durationSec = a?.durationSec; o.items = [{ idx: 0, legacy: true, mediaType: a?.mediaType, access: p.access, pricePoints: p.unlockPricePoints, durationSec: a?.durationSec, locked: !ok, hasPreview: !!p.previewMediaId }]; }
+      if (!ok) { delete o.exclusiveText; delete o.mediaId; delete o.previewMediaId; if (p.access === 'EXCLUSIVE') delete o.content; }
+    }
+    return { ...o, locked, likeCount: L[String(p._id)] || 0, liked: M.has(String(p._id)), commentCount: C[String(p._id)] || 0, following: F.has(author), sponsored: P.has(String(p._id)) };
   });
 }
 
@@ -134,6 +147,7 @@ r.post('/posts/:id/comments', asyncHandler(async (req, res) => {
   if (rootId) await Comment.updateOne({ _id: rootId }, { $inc: { replyCount: 1 } });
   const target = parent ? parent.userId : post.authorId;
   if (String(target) !== req.user.id) await notify(target, 'COMMENT', `${req.user.username} ${parent ? 'replied to your comment' : 'commented on your post'}`, '/home');
+  const mentioned = (await resolveMentions(b.text, req.user._id)).filter((id) => String(id) !== String(target)); await notifyMentions(mentioned, req.user, 'in a comment', '/home');
   const full = await Comment.findById(c._id).populate('userId', CU).lean();
   res.status(201).json({ comment: (await shapeComments([full], req.user, post.authorId))[0] });
 }));
@@ -162,7 +176,7 @@ r.post('/block/:userId', asyncHandler(async (req, res) => {
 }));
 const CAT = ['HARASSMENT', 'IMPERSONATION', 'FRAUD', 'INAPPROPRIATE_CONTENT', 'SPAM', 'PAYMENT_DISPUTE', 'SAFETY', 'OTHER'];
 r.post('/report', asyncHandler(async (req, res) => {
-  const b = z.object({ targetType: z.enum(['USER', 'POST', 'RATING', 'MESSAGE', 'COMMUNITY']), targetId: z.string(), category: z.enum(CAT).default('OTHER'), reason: z.string().min(3).max(500) }).parse(req.body);
+  const b = z.object({ targetType: z.enum(['USER', 'POST', 'RATING', 'MESSAGE', 'COMMUNITY', 'PAYOUT']), targetId: z.string(), category: z.enum(CAT).default('OTHER'), reason: z.string().min(3).max(500) }).parse(req.body);
   const priority = ['SAFETY', 'FRAUD', 'HARASSMENT'].includes(b.category) ? 'HIGH' : b.category === 'SPAM' ? 'LOW' : 'NORMAL';
   res.status(201).json(await Report.create({ ...b, priority, reporterId: req.user._id, history: [{ status: 'NEW', at: new Date(), by: req.user._id }] }));
 }));

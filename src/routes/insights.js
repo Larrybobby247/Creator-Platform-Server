@@ -28,6 +28,18 @@ r.get('/posts', asyncHandler(async (req, res) => {
   res.json({ items, totals: { posts: items.length, views: sum('views'), likes: sum('likes'), comments: sum('comments'), revenuePoints: sum('revenuePoints') } });
 }));
 
+// Quick performance numbers for ONE of your posts (the Insights pop-up on a post). Everyone can see their own.
+r.get('/post/:id', asyncHandler(async (req, res) => {
+  if (!/^[0-9a-f]{24}$/i.test(req.params.id)) throw new ApiError(400, 'Bad id');
+  const p = await Post.findOne({ _id: req.params.id, authorId: req.user._id, status: 'PUBLISHED' }).select('viewCount access unlockPricePoints media createdAt').lean(); if (!p) throw new ApiError(404, 'Not found');
+  const creator = req.user.accountMode === 'CREATOR';
+  const [likes, comments, unlocks, promo] = await Promise.all([Like.countDocuments({ postId: p._id }), Comment.countDocuments({ postId: p._id, deleted: { $ne: true } }),
+    creator ? PointTransaction.aggregate([{ $match: { relatedId: p._id, type: 'EXCLUSIVE_CONTENT_UNLOCK', status: 'COMPLETED' } }, { $group: { _id: null, n: { $sum: 1 }, points: { $sum: '$amount' } } }]) : [],
+    Promotion.aggregate([{ $match: { ownerId: req.user._id, targetType: 'POST', targetId: p._id } }, { $group: { _id: null, impressions: { $sum: '$impressions' }, clicks: { $sum: '$clicks' }, active: { $max: { $cond: [{ $and: [{ $eq: ['$status', 'ACTIVE'] }, { $gt: ['$expiresAt', new Date()] }] }, 1, 0] } } } }])]);
+  const views = p.viewCount || 0; const engagement = views ? Math.round(((likes + comments) / views) * 1000) / 10 : 0;
+  res.json({ views, likes, comments, engagementPct: engagement, unlocks: unlocks[0]?.n || 0, revenuePoints: unlocks[0]?.points || 0, boost: promo[0] ? { impressions: promo[0].impressions, clicks: promo[0].clicks, active: !!promo[0].active } : null, boostable: p.access === 'PUBLIC' });
+}));
+
 // Advanced analytics: Pro creators only (enforced here, not just hidden in the UI).
 r.get('/advanced', asyncHandler(async (req, res) => {
   if (req.user.accountMode !== 'CREATOR') throw new ApiError(403, 'Creators only', 'CREATOR_ONLY');

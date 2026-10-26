@@ -10,7 +10,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import rateLimit from 'express-rate-limit';
 import { authenticate } from '../middleware/authenticate.js';
-import { sendEmail } from '../services/push.js';
+import { sendEmail, emailHtml } from '../services/email.js';
 
 export const TERMS_VERSION = '2026-10';
 const r = Router();
@@ -36,7 +36,7 @@ async function issueVerification(u) {
   const token = crypto.randomBytes(32).toString('hex');
   u.emailVerifyHash = crypto.createHash('sha256').update(token).digest('hex'); u.emailVerifyExpires = new Date(Date.now() + 24 * 3600e3); u.emailVerifySentAt = new Date(); await u.save();
   const link = `${env.frontendUrl}/verify-email?token=${token}`;
-  if (env.smtpUrl || process.env.NODE_ENV === 'test') await sendEmail(u.email, 'Verify your email address', `Welcome! Confirm your email to activate your account (link valid for 24 hours):\n\n${link}`);
+  if (env.emailEnabled || process.env.NODE_ENV === 'test') await sendEmail(u.email, 'Verify your email address', `Welcome! Confirm your email to activate your account (link valid for 24 hours):\n\n${link}`, { html: emailHtml({ title: 'Confirm your email', lines: ['Welcome! Confirm your email address to activate your account.', 'This link is valid for 24 hours.'], cta: { label: 'Verify my email', url: link } }) });
   else if (!env.prod) console.log('[dev] email verification link:', link);
 }
 const sensitive = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
@@ -44,7 +44,7 @@ const dupe = (e) => { if (e.code === 11000) throw new ApiError(409, 'Username or
 
 r.post('/register', sensitive, asyncHandler(async (req, res) => {
   const b = z.object({ username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/i), email: z.string().email(), password: z.string().min(8), ref: z.string().optional(), gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(), age: z.number().int().min(18, 'You must be 18 or older to join').max(120).optional(), acceptTerms: z.literal(true, { errorMap: () => ({ message: 'You must accept the Terms and Privacy Policy' }) }) }).parse(req.body);
-  if (env.prod && !env.smtpUrl) throw new ApiError(503, 'Sign-up is temporarily unavailable (email service not configured)', 'EMAIL_NOT_CONFIGURED');
+  if (env.prod && !env.emailEnabled) throw new ApiError(503, 'Sign-up is temporarily unavailable (email service not configured)', 'EMAIL_NOT_CONFIGURED');
   const { acceptTerms, ...rest } = b;
   const u = await createUser({ ...rest, passwordHash: await bcrypt.hash(b.password, 12) }).catch(dupe);
   await issueVerification(u);
@@ -97,7 +97,7 @@ r.post('/forgot', sensitive, asyncHandler(async (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     u.resetHash = crypto.createHash('sha256').update(token).digest('hex'); u.resetExpires = new Date(Date.now() + 30 * 60e3); await u.save();
     const link = `${env.frontendUrl}/reset?token=${token}`;
-    if (env.smtpUrl) sendEmail(u.email, 'Reset your password', `Use this link within 30 minutes:\n${link}`); else if (!env.prod) console.log('[dev] password reset link:', link);
+    if (env.emailEnabled) sendEmail(u.email, 'Reset your password', `Use this link within 30 minutes:\n${link}`, { html: emailHtml({ title: 'Reset your password', lines: ['We received a request to reset your password.', 'The link below works for 30 minutes. If this was not you, ignore this email.'], cta: { label: 'Choose a new password', url: link } }) }); else if (!env.prod) console.log('[dev] password reset link:', link);
   }
   res.json({ ok: true });
 }));

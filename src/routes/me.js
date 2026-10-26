@@ -49,9 +49,9 @@ const listPeople = (dir) => asyncHandler(async (req, res) => {
   res.json({ users: users.map((u) => ({ ...u, following: back.has(String(u._id)) })), hasMore: more, total: await Follow.countDocuments(q) });
 });
 r.get('/me/followers', listPeople('followers')); r.get('/me/following', listPeople('following'));
-r.post('/me/avatar', imageUpload, asyncHandler(async (req, res) => { req.user.avatarUrl = savePublicImage(req.file); await req.user.save(); res.json({ url: req.user.avatarUrl }); }));
-r.post('/me/cover', imageUpload, asyncHandler(async (req, res) => { req.user.coverUrl = savePublicImage(req.file); await req.user.save(); res.json({ url: req.user.coverUrl }); }));
-r.post('/me/cover-post', requireCreator, imageUpload, asyncHandler(async (req, res) => res.json({ url: savePublicImage(req.file) })));
+r.post('/me/avatar', imageUpload, asyncHandler(async (req, res) => { req.user.avatarUrl = await savePublicImage(req.file); await req.user.save(); res.json({ url: req.user.avatarUrl }); }));
+r.post('/me/cover', imageUpload, asyncHandler(async (req, res) => { req.user.coverUrl = await savePublicImage(req.file); await req.user.save(); res.json({ url: req.user.coverUrl }); }));
+r.post('/me/cover-post', requireCreator, imageUpload, asyncHandler(async (req, res) => res.json({ url: await savePublicImage(req.file) })));
 r.put('/me/password', asyncHandler(async (req, res) => {
   const b = z.object({ current: z.string(), next: z.string().min(8) }).parse(req.body);
   const u = await User.findById(req.user._id).select('+passwordHash');

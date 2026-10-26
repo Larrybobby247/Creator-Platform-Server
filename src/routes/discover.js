@@ -44,6 +44,15 @@ r.get('/trending', asyncHandler(async (_q, res) => {
   }));
 }));
 
+// Popular hashtags that start with what you typed (or the overall popular ones when nothing is typed).
+r.get('/hashtags', asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').replace(/^#/, '').toLowerCase().replace(/[^\p{L}\p{N}_]/gu, '').slice(0, 30);
+  const match = { status: 'PUBLISHED', access: 'PUBLIC', 'moderation.status': { $nin: ['REMOVED', 'RESTRICTED'] } };
+  if (!q) return res.json({ tags: (await cached('trending', 5 * 60e3, async () => (await Post.aggregate([{ $match: { ...match, createdAt: { $gte: new Date(Date.now() - 7 * 864e5) } } }, { $unwind: '$tags' }, { $group: { _id: '$tags', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 10 }])).map((t) => ({ tag: t._id, count: t.count })))) });
+  const pre = new RegExp(`^${q}`);
+  const rows = await Post.aggregate([{ $match: { ...match, tags: pre } }, { $unwind: '$tags' }, { $match: { tags: pre } }, { $group: { _id: '$tags', count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }, { $limit: 8 }]);
+  res.json({ tags: rows.map((t) => ({ tag: t._id, count: t.count })) });
+}));
 r.get('/search', asyncHandler(async (req, res) => {
   const q = esc(req.query.q || ''); if (q.length < 2) return res.json({ people: [], communities: [], topics: [] });
   const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), pre = new RegExp(`^${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');

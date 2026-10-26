@@ -13,6 +13,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { emitToUser, isOnline } from '../realtime.js';
 import { getSetting } from '../services/settings.js';
 import { assertVideoAllowed, probeDuration, storePrivate, signUrl } from '../services/media.js';
+import { deleteStored } from '../services/storage.js';
 import { spend } from '../services/pointLedger.js';
 import { recordEarning } from '../services/earnings.js';
 
@@ -26,10 +27,13 @@ const MIME = { 'image/jpeg': ['IMAGE', '.jpg'], 'image/png': ['IMAGE', '.png'], 
 // Never leak paid content: locked paid messages lose their text/media for everyone except sender and buyers.
 export function shapeMsg(m, meId) {
   const o = m.toObject ? m.toObject() : { ...m };
+  if (o.deletedForAll) { // "delete for everyone": only a tombstone is left; nothing of the content is sent
+    return { _id: o._id, conversationId: o.conversationId, senderId: o.senderId, type: o.type, createdAt: o.createdAt, deletedForAll: true, price: 0, reactions: [] };
+  }
   const mine = String(o.senderId) === String(meId);
   const unlocked = mine || (o.unlockedBy || []).some((u) => String(u) === String(meId));
   if (o.price > 0 && !unlocked) { delete o.paidText; delete o.mediaId; o.locked = true; }
-  delete o.unlockedBy; return o;
+  delete o.unlockedBy; delete o.deletedFor; return o;
 }
 const convFor = async (id, me) => { const c = await Conversation.findOne({ _id: id, participants: me }); if (!c) throw new ApiError(404, 'Conversation not found'); return c; };
 async function deliver(c, m, from, clientId) {
@@ -126,11 +130,16 @@ r.post('/:id/read', asyncHandler(async (req, res) => {
   if (unreadOf(c, req.user._id) > 0) { c.unread.set(String(req.user._id), 0); await c.save(); }
   emitToUser(other(c, req.user._id), 'conversation:read', { conversationId: c.id, by: req.user.id }); res.json({ ok: true });
 }));
+r.get('/presence/:userId', asyncHandler(async (req, res) => {
+  if (!/^[0-9a-f]{24}$/i.test(req.params.userId)) throw new ApiError(400, 'Bad id');
+  const u = await User.findById(req.params.userId).select('prefs'); if (!u) throw new ApiError(404, 'Not found');
+  res.json({ online: u.prefs?.showOnline !== false && isOnline(u._id) });
+}));
 r.get('/:conversationId', asyncHandler(async (req, res) => {
   const c = await convFor(req.params.conversationId, req.user._id);
   if (!req.query.before) { c.unread.set(String(req.user._id), 0); await c.save(); emitToUser(other(c, req.user._id), 'conversation:read', { conversationId: c.id, by: req.user.id }); }
   const before = req.query.before ? new Date(String(req.query.before)) : null;
-  const rows = await Message.find({ conversationId: c._id, ...(before && !isNaN(before) ? { createdAt: { $lt: before } } : {}) }).sort('-createdAt').limit(41).lean();
+  const rows = await Message.find({ conversationId: c._id, deletedFor: { $ne: req.user._id }, ...(before && !isNaN(before) ? { createdAt: { $lt: before } } : {}) }).sort('-createdAt').limit(41).lean();
   const hasMore = rows.length > 40; if (hasMore) rows.pop(); rows.reverse(); // newest 40, oldest first
   res.json({ messages: rows.map((m) => shapeMsg(m, req.user._id)), accepted: c.accepted, hasMore });
 }));
@@ -151,11 +160,13 @@ r.post('/attachment', up, asyncHandler(async (req, res) => {
     const kind = MIME[f.mimetype]; if (!kind) throw new ApiError(415, 'Unsupported file type');
     const max = kind[0] === 'IMAGE' ? 10 * 1024 * 1024 : await getSetting('maxUploadBytes'); if (f.size > max) throw new ApiError(413, 'File too large');
     if (b.price > 0 && req.user.accountMode !== 'CREATOR') throw new ApiError(403, 'Only creators can send paid messages');
+    if (b.price > 0 && kind[0] === 'VOICE' && req.user.services?.paidVoice?.enabled === false) throw new ApiError(403, 'Paid voice messages are switched off. Turn them on in Settings → Creator services.', 'SERVICE_OFF');
+    if (b.price > 0 && !Number.isInteger(b.price)) throw new ApiError(400, 'Price must be a whole number of points');
     const c = await getOrCreateConv(req.user, b.toUserId);
     let durationSec;
     if (kind[0] === 'VIDEO') durationSec = await assertVideoAllowed(f.path, req.user.creatorPlan);
     if (kind[0] === 'VOICE') { durationSec = await probeDuration(f.path); const lim = await getSetting('voiceMaxSec'); if (durationSec > lim + 0.5) throw new ApiError(422, `Voice messages can be up to ${lim}s`, 'VOICE_TOO_LONG'); }
-    const key = storePrivate(f.path, kind[1]);
+    const key = await storePrivate(f.path, kind[1]);
     const a = await MediaAsset.create({ ownerId: req.user._id, storageKey: key, mediaType: kind[0] === 'VOICE' ? 'AUDIO' : kind[0], mimeType: f.mimetype, size: f.size, durationSec });
     const m = await Message.create({ conversationId: c._id, senderId: req.user._id, type: kind[0], mediaType: kind[0], mediaId: a._id, text: b.caption, replyTo: b.replyTo, price: b.price });
     res.status(201).json(await deliver(c, m, req.user, b.clientId));
@@ -183,7 +194,7 @@ r.post('/message/:messageId/unlock', asyncHandler(async (req, res) => {
 }));
 // Signed, short-lived URL for a message's media. Only conversation participants; paid media only after unlock.
 r.get('/message/:messageId/media', asyncHandler(async (req, res) => {
-  const m = await Message.findById(req.params.messageId); if (!m?.mediaId) throw new ApiError(404, 'Not found');
+  const m = await Message.findById(req.params.messageId); if (!m?.mediaId || m.deletedForAll || (m.deletedFor || []).some((x) => String(x) === req.user.id)) throw new ApiError(404, 'Not found');
   await convFor(m.conversationId, req.user._id);
   const s = shapeMsg(m, req.user._id); if (s.locked) throw new ApiError(403, 'Locked', 'LOCKED');
   res.json({ url: signUrl(m.mediaId, req.user.id, 300) });
@@ -198,4 +209,37 @@ r.post('/message/:messageId/react', asyncHandler(async (req, res) => {
 }));
 r.post('/:id/accept', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); c.accepted = true; await c.save(); res.json({ ok: true }); }));
 r.post('/:id/archive', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await Conversation.updateOne({ _id: c._id }, { $addToSet: { archivedBy: req.user._id } }); res.json({ ok: true }); }));
+
+// ---- delete messages ----
+// "me": hides the message from YOUR chat only. Works on anyone's message (yours or theirs), the other person is not affected.
+// "everyone": only the sender can do it. The content is erased for both people and media is removed from storage.
+r.post('/message/:messageId/delete', asyncHandler(async (req, res) => {
+  const { scope } = z.object({ scope: z.enum(['me', 'everyone']) }).parse(req.body);
+  const m = await Message.findById(req.params.messageId); if (!m) throw new ApiError(404, 'Not found');
+  const c = await convFor(m.conversationId, req.user._id);
+  if (scope === 'me') { await Message.updateOne({ _id: m._id }, { $addToSet: { deletedFor: req.user._id } }); emitToUser(req.user._id, 'message:deleted', { messageId: m.id, conversationId: c.id, scope: 'me' }); return res.json({ ok: true, scope }); }
+  if (String(m.senderId) !== req.user.id) throw new ApiError(403, 'You can only delete your own messages for everyone. Use "Delete for me" instead.', 'NOT_SENDER');
+  if (m.deletedForAll) return res.json({ ok: true, scope });
+  if (m.price > 0 && (m.unlockedBy || []).length) throw new ApiError(409, 'Someone already paid for this message, so it cannot be deleted for everyone.', 'HAS_BUYERS');
+  const mediaId = m.mediaId; m.deletedForAll = true; m.deletedAt = new Date(); m.text = undefined; m.paidText = undefined; m.mediaId = undefined; m.reactions = []; await m.save();
+  if (mediaId) { const a = await MediaAsset.findById(mediaId); if (a && String(a.ownerId) === req.user.id) { await deleteStored(a.storageKey); await a.deleteOne(); } }
+  const last = await Message.findOne({ conversationId: c._id, deletedForAll: { $ne: true } }).sort('-createdAt').lean();
+  if (!last || last.createdAt < m.createdAt) { c.lastMessageText = last ? lastText(last) : ''; await c.save(); } // the deleted one was the newest: refresh the inbox preview
+  for (const p of c.participants) emitToUser(p, 'message:deleted', { messageId: m.id, conversationId: c.id, scope: 'everyone' });
+  res.json({ ok: true, scope });
+}));
+const lastText = (m) => (m.type === 'TEXT' ? (m.text || '').slice(0, 120) : m.price > 0 ? '🔒 Paid message' : m.type === 'VOICE' ? '🎤 Voice message' : m.type === 'IMAGE' ? '📷 Photo' : '🎬 Video');
+
+// ---- change the category of a conversation (one category at a time; null = no category) ----
+r.post('/:id/category', asyncHandler(async (req, res) => {
+  const { labelId } = z.object({ labelId: z.string().nullable() }).parse(req.body);
+  const c = await convFor(req.params.id, req.user._id);
+  if (labelId && !(await ConversationLabel.exists({ _id: labelId, ownerId: req.user._id }))) throw new ApiError(404, 'Category not found');
+  await Conversation.updateOne({ _id: c._id }, { $pull: { labels: { userId: req.user._id } } });
+  if (labelId) await Conversation.updateOne({ _id: c._id }, { $push: { labels: { userId: req.user._id, labelId } } });
+  res.json({ ok: true, labelId });
+}));
+r.post('/:id/unarchive', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await Conversation.updateOne({ _id: c._id }, { $pull: { archivedBy: req.user._id } }); res.json({ ok: true }); }));
+
+// ---- presence: only people who allow it are shown as online ----
 export default r;

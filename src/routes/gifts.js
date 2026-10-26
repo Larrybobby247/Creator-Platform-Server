@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Gift, GiftTransaction } from '../models/Social.js';
-import { recordEarning } from '../services/earnings.js';
+import { recordEarning, commissionFor } from '../services/earnings.js';
 import { notify } from '../services/notify.js';
 import { User } from '../models/User.js';
 import { authenticate } from '../middleware/authenticate.js';
@@ -20,11 +20,12 @@ r.post('/send', authenticate, asyncHandler(async (req, res) => {
   const [gift, creator] = await Promise.all([Gift.findOne({ _id: b.giftId, active: true }), User.findOne({ _id: b.creatorId, accountMode: 'CREATOR' })]);
   if (!gift || !creator) throw new ApiError(404, 'Gift or creator not found');
   if (creator.id === req.user.id) throw new ApiError(400, 'You cannot gift yourself');
+  if (creator.services?.tipsGifts?.enabled === false) throw new ApiError(403, 'This creator is not accepting tips and gifts right now.', 'SERVICE_OFF');
   const gross = gift.pricePoints * b.quantity; // price comes from DB, never the client
   const { tx, duplicate } = await spend({ userId: req.user._id, type: 'CREATOR_GIFT', amount: gross, idempotencyKey: `gift:${req.user.id}:${b.idempotencyKey}`, creatorId: creator._id, relatedId: gift._id });
   if (duplicate) return res.json({ ok: true, duplicate: true });
   try {
-    const { commission, net } = splitCommission(gross, await getSetting('commissionBps'));
+    const { commission, net } = splitCommission(gross, await commissionFor(creator._id));
     await GiftTransaction.create({ senderId: req.user._id, recipientId: creator._id, giftId: gift._id, quantity: b.quantity, grossPoints: gross, commissionPoints: commission, netPoints: net, transactionId: tx._id });
     await recordEarning({ creatorId: creator._id, sourceTx: tx, gross, label: 'gift' });
     await notify(creator._id, 'GIFT', `${req.user.username} sent you ${b.quantity}× ${gift.name}`, '/studio');
