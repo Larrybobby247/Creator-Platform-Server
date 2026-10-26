@@ -19,7 +19,7 @@ const expireSubscriptions = async () => {
 };
 const expireMeetups = async () => {
   const due = await MeetupBooking.find({ status: { $in: ['PAID_AND_RESERVED', 'CREATOR_ACCEPTED', 'MEETUP_PENDING_USER_ACCEPTANCE'] }, expiresAt: { $lte: new Date() } });
-  for (const b of due) { const o = await transition(b._id, ['PAID_AND_RESERVED', 'CREATOR_ACCEPTED', 'MEETUP_PENDING_USER_ACCEPTANCE'], 'EXPIRED', {}, null); if (o) { await refundBooking(b, { includeTransport: true }); await notify(b.userId, 'MEETUP', 'A meetup request expired and was refunded', '/meetups'); } }
+  for (const b of due) { const o = await transition(b._id, ['PAID_AND_RESERVED', 'CREATOR_ACCEPTED', 'MEETUP_PENDING_USER_ACCEPTANCE'], 'EXPIRED', {}, null); if (o) { await refundBooking(b, { includeTransport: true }); await notify(b.userId, 'MEETUP', 'An Innercircle request expired and was refunded', '/meetups'); } }
 };
 const expirePro = async () => {
   const due = await User.find({ creatorPlan: 'PRO', proExpiresAt: { $lte: new Date() } });
