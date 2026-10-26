@@ -20,14 +20,14 @@ const r = Router();
 const pos = z.number().int().positive(), nn = z.number().int().min(0), pair = (s) => z.object({ DEFAULT: s, PRO: s });
 const SCHEMAS = {
   platform: z.object({ name: z.string().trim().min(2).max(40), tagline: z.string().trim().max(120), supportEmail: z.string().email(), logoUrl: z.string().max(300).optional().default(''), currency: z.literal('NGN'), timezone: z.string().min(3).max(60) }),
-  nairaPerPoint: pos, commissionBps: z.number().int().min(0).max(10000), maxPurchasePoints: pos, minPayoutPoints: pos, verificationFeeKobo: nn,
+  nairaPerPoint: pos, commissionBps: z.number().int().min(0).max(10000), proCommissionBps: z.number().int().min(0).max(10000), maxPurchasePoints: pos, minPayoutPoints: pos, verificationFeeKobo: nn,
   videoLimitSec: pair(pos), maxUploadBytes: pos, previewMaxSec: pos, voiceMaxSec: pos,
-  planLimits: z.object({ maxUnlockPoints: pair(pos), maxSubscriptionPoints: pair(pos), pinnedPosts: z.object({ USER: nn, DEFAULT: nn, PRO: nn }), advancedAnalytics: pair(z.boolean()) }),
+  planLimits: z.object({ exclusivePostsPerMonth: pair(nn), pinnedPosts: z.object({ USER: nn, DEFAULT: nn, PRO: nn }), advancedAnalytics: pair(z.boolean()) }),
   promoPrices: z.object({ DAY1: pos, DAY3: pos, DAY7: pos }), referralBps: z.number().int().min(0).max(10000), referralDays: pos, referralHoldDays: nn,
   meetupDisputeHours: nn, meetupRequestExpiryHours: pos, proPricePoints: pos, proDays: pos,
 };
-const GROUPS = { General: ['platform'], 'Pricing and fees': ['nairaPerPoint', 'commissionBps', 'maxPurchasePoints', 'minPayoutPoints', 'proPricePoints', 'proDays', 'planLimits', 'promoPrices', 'verificationFeeKobo'], Content: ['videoLimitSec', 'maxUploadBytes', 'previewMaxSec', 'voiceMaxSec'], Referrals: ['referralBps', 'referralDays', 'referralHoldDays'], Meetups: ['meetupDisputeHours', 'meetupRequestExpiryHours'] };
-const HIGH_IMPACT = new Set(['nairaPerPoint', 'commissionBps', 'maxPurchasePoints', 'planLimits']);
+const GROUPS = { General: ['platform'], 'Pricing and fees': ['nairaPerPoint', 'commissionBps', 'proCommissionBps', 'maxPurchasePoints', 'minPayoutPoints', 'proPricePoints', 'proDays', 'planLimits', 'promoPrices', 'verificationFeeKobo'], Content: ['videoLimitSec', 'maxUploadBytes', 'previewMaxSec', 'voiceMaxSec'], Referrals: ['referralBps', 'referralDays', 'referralHoldDays'], Meetups: ['meetupDisputeHours', 'meetupRequestExpiryHours'] };
+const HIGH_IMPACT = new Set(['nairaPerPoint', 'commissionBps', 'proCommissionBps', 'proCommissionBps', 'maxPurchasePoints', 'planLimits']);
 
 r.get('/settings', need('settings.read'), asyncHandler(async (_q, res) => { const values = {}; for (const k of Object.keys(SCHEMAS)) values[k] = await getSetting(k); res.json({ values, groups: GROUPS, highImpact: [...HIGH_IMPACT] }); }));
 r.put('/settings/:key', need('settings.manage'), asyncHandler(async (req, res) => {
@@ -41,7 +41,7 @@ r.get('/settings/:key/history', need('settings.read'), asyncHandler(async (req, 
 
 // ================= admin accounts & roles =================
 import { imageUpload, savePublicImage } from '../../services/publicUpload.js';
-r.post('/settings/logo', need('settings.manage'), imageUpload, asyncHandler(async (req, res) => res.json({ url: savePublicImage(req.file) })));
+r.post('/settings/logo', need('settings.manage'), imageUpload, asyncHandler(async (req, res) => res.json({ url: await savePublicImage(req.file) })));
 const roleEnum = z.enum(['SUPER_ADMIN', 'FINANCE', 'MODERATOR', 'SUPPORT', 'VERIFICATION']);
 const supers = () => User.countDocuments({ role: 'ADMIN', adminRole: 'SUPER_ADMIN', accountStatus: 'ACTIVE' });
 r.get('/roles', need('admins.manage'), asyncHandler(async (_q, res) => res.json({ roles: ROLE_PERMISSIONS, permissions: PERMISSIONS, admins: await User.find({ role: 'ADMIN' }).select('username email adminRole adminPermissions lastActiveAt accountStatus').lean() })));
@@ -81,9 +81,9 @@ r.get('/health', need('health.read'), asyncHandler(async (_q, res) => {
     { name: 'Payment provider', status: env.paymentProvider === 'paystack' ? (env.paystackSecret ? 'configured' : 'misconfigured') : 'test mode (mock)', detail: env.paymentProvider === 'paystack' ? 'Key present; live connectivity is not probed.' : 'No real payments in this mode.' },
     { name: 'Payment webhooks (24h)', status: hookFail ? 'failures' : hookOk ? 'ok' : 'unknown', detail: `${hookOk} processed, ${hookFail} failed` },
     { name: 'Identity verification (Dojah)', status: dj.ok ? `configured (${dj.environment})` : `unavailable: ${dj.reason}` },
-    { name: 'Email delivery', status: env.smtpUrl ? 'configured' : 'not configured', detail: 'Delivery success is not tracked.' },
+    { name: 'Email delivery (Resend)', status: env.emailEnabled ? 'configured' : 'not configured', detail: `Sender: ${env.mailFrom}. Delivery success is not tracked here; see the Resend dashboard.` },
     { name: 'Web push', status: env.vapidPublic && env.vapidPrivate ? 'configured' : 'not configured' },
-    { name: 'Private media storage (local disk)', status: dir(env.mediaDir) }, { name: 'Public uploads', status: dir(env.publicDir) },
+    { name: 'Private media storage', status: env.cloudinaryEnabled ? 'Cloudinary (authenticated, not publicly reachable)' : `local disk fallback: ${dir(env.mediaDir)} (set CLOUDINARY_* for production)` }, { name: 'Public uploads', status: dir(env.publicDir) },
     { name: 'Google sign-in', status: env.googleClientId ? 'configured' : 'not configured' },
   ], jobs: Object.entries(jobStatus).map(([name, s]) => ({ name, ...s })), failedWebhooks: lastHooks, recentErrors, uptimeSec: Math.round(process.uptime()) });
 }));

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { User } from '../../models/User.js';
 import { Post, Gift, GiftTransaction } from '../../models/Social.js';
 import { PointTransaction, CreatorEarning, Wallet, AuditLog } from '../../models/Finance.js';
-import { Follow, VerificationRecord, Report, Community, CommunityMember, Rating, Subscription } from '../../models/Extra.js';
+import { Follow, VerificationRecord, Report, Community, CommunityMember, Rating, Subscription, Payout } from '../../models/Extra.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { ApiError } from '../../utils/ApiError.js';
 import { requirePermission as need } from '../../services/rbac.js';
@@ -161,6 +161,7 @@ r.get('/reports/:id', need('reports.read'), asyncHandler(async (req, res) => {
   else if (rp.targetType === 'USER') target = await User.findById(rp.targetId).select('username displayName accountStatus accountMode').lean();
   else if (rp.targetType === 'COMMUNITY') target = await Community.findById(rp.targetId).select('name description status').lean();
   else if (rp.targetType === 'RATING') target = await Rating.findById(rp.targetId).select('stars text status').lean();
+  else if (rp.targetType === 'PAYOUT') target = await Payout.findById(rp.targetId).select('reference amountPoints nairaAmount bankName accountLast4 status createdAt creatorId').lean();
   const related = await Report.find({ targetType: rp.targetType, targetId: rp.targetId, _id: { $ne: rp._id } }).sort('-createdAt').limit(10).select('category status createdAt').lean();
   res.json({ report: rp, target, related });
 }));
@@ -205,5 +206,5 @@ r.get('/gifts', need('gifts.manage'), asyncHandler(async (_q, res) => { const [i
 const giftBody = z.object({ name: z.string().trim().min(2).max(40), description: z.string().max(200).optional(), imageUrl: z.string().max(300).optional(), pricePoints: z.number().int().min(1).max(100000), active: z.boolean().optional(), order: z.number().int().min(0).max(1000).optional() });
 r.post('/gifts', need('gifts.manage'), asyncHandler(async (req, res) => { const b = giftBody.parse(req.body); const g = await Gift.create(b); await audit(req, 'GIFT_CREATED', g.id, { after: b }); res.status(201).json(g); }));
 r.patch('/gifts/:id', need('gifts.manage'), asyncHandler(async (req, res) => { const b = giftBody.partial().parse(req.body); const g = await Gift.findById(req.params.id); if (!g) throw new ApiError(404, 'Not found'); const before = { name: g.name, pricePoints: g.pricePoints, active: g.active, order: g.order }; Object.assign(g, b); await g.save(); await audit(req, 'GIFT_UPDATED', g.id, { before, after: b }); res.json(g); })); // disabling never deletes history
-r.post('/gifts/image', need('gifts.manage'), imageUpload, asyncHandler(async (req, res) => res.json({ url: savePublicImage(req.file) })));
+r.post('/gifts/image', need('gifts.manage'), imageUpload, asyncHandler(async (req, res) => res.json({ url: await savePublicImage(req.file) })));
 export default r;
