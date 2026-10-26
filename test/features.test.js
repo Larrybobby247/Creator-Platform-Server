@@ -21,12 +21,13 @@ test('anyone can post, but only creators can post exclusive/paid content', async
   assert.equal((await user('POST', '/api/media/posts', { content: 'x', unlockPricePoints: 5 })).status, 403);
   assert.equal((await cr('POST', '/api/media/posts', { content: 'paid', access: 'EXCLUSIVE', unlockPricePoints: 3 })).status, 201);
 });
-test('plan price caps are enforced on the server (Default vs Pro)', async (t) => {
+test('any price is allowed; Pro raises the monthly exclusive-post limit', async (t) => {
   if (!db) return t.skip(); const { c: d } = await creator(); const { c: p } = await creator({ creatorPlan: 'PRO' });
-  const r = await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 11 }); assert.equal(r.status, 400); assert.equal(r.json.code, 'PLAN_LIMIT');
-  assert.equal((await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 10 })).status, 201);
+  assert.equal((await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 500 })).status, 201);
   assert.equal((await p('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 100 })).status, 201);
-  assert.equal((await d('PATCH', '/api/creators/settings', { subscriptionPricePoints: 11 })).status, 400);
+  assert.equal((await d('PATCH', '/api/creators/settings', { subscriptionPricePoints: 50 })).status, 200);
+  for (let i = 0; i < 9; i++) await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2 });
+  const r = await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2 }); assert.equal(r.status, 403); assert.equal(r.json.code, 'PLAN_LIMIT');
 });
 test('pinning respects the plan limit and creators can pin exclusive posts', async (t) => {
   if (!db) return t.skip(); const { c, u } = await creator(); const mkp = (o) => S.Post.create({ authorId: u._id, status: 'PUBLISHED', content: 'p', ...o });
