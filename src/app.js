@@ -7,6 +7,7 @@ import compression from 'compression';
 import { env } from './config/env.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import auth from './routes/auth.js';
+import publicRoutes from './routes/public.js';
 import creators from './routes/creators.js';
 import studio from './routes/studio.js';
 import points from './routes/points.js';
@@ -27,6 +28,7 @@ import stories from './routes/stories.js';
 import insights from './routes/insights.js';
 
 export const app = express();
+app.set('trust proxy', 1); // behind Render's proxy: without this every visitor shares one IP, so the rate limits (e.g. 10 sign-ups an hour) were hit by everyone together
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(compression()); // JSON compresses ~5-10x; hosting-level compression is fine too
 app.use((req, res, next) => { // timing: Server-Timing header on every response + log of slow requests (path only, never query strings or bodies)
@@ -43,7 +45,8 @@ app.use('/uploads', express.static(env.publicDir, { maxAge: '365d', immutable: t
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
 app.use('/api/points/webhook', points); // raw-body route must be mounted before express.json
 app.use(express.json({ limit: '100kb' }));
-app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 100 }), auth);
+app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } }), auth);
+app.use('/api/public', publicRoutes); // no login needed: shared profile and community pages
 app.use('/api/creators', creators);
 app.use('/api/studio/verification', verification);
 app.use('/api/studio', studio);
