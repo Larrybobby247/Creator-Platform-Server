@@ -43,7 +43,7 @@ async function issueVerification(u) {
 const sensitive = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } });
 const dupe = (e) => { if (e.code === 11000) throw new ApiError(409, 'Username or email already used'); throw e; };
 
-r.post('/register', sensitive, asyncHandler(async (req, res) => {
+r.post(['/register', '/signup'], sensitive, asyncHandler(async (req, res) => {
   const b = z.object({ username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/i), email: z.string().email(), password: z.string().min(8), ref: z.string().optional(), gender: z.enum(['MALE', 'FEMALE', 'OTHER']).optional(), age: z.number().int().min(18, 'You must be 18 or older to join').max(120).optional(), acceptTerms: z.literal(true, { errorMap: () => ({ message: 'You must accept the Terms and Privacy Policy' }) }) }).parse(req.body);
   if (env.prod && !env.emailEnabled) throw new ApiError(503, 'Sign-up is temporarily unavailable (email service not configured)', 'EMAIL_NOT_CONFIGURED');
   const { acceptTerms, ...rest } = b;
