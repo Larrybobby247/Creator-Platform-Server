@@ -18,7 +18,7 @@ export async function sendEmail(to, subject, text, opts = {}) {
   try {
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST', headers: { Authorization: `Bearer ${env.resendApiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: env.mailFrom, to: [to], subject, text, ...(opts.html ? { html: opts.html } : {}) }),
+      signal: AbortSignal.timeout(10000), body: JSON.stringify({ from: env.mailFrom, to: [to], subject, text, ...(opts.html ? { html: opts.html } : {}) }),
     });
     if (!r.ok) { console.error('email failed (Resend):', r.status, (await r.text().catch(() => '')).slice(0, 200)); return false; }
     return true;
