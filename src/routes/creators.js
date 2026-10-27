@@ -39,7 +39,7 @@ r.get('/application/meta', asyncHandler(async (req, res) => {
     services: [['paidPhotos', 'Paid photos'], ['paidVideos', 'Paid videos'], ['promotions', 'Creator promotions'], ['specialRequests', 'Special requests'], ['paidCommunities', 'Paid communities'], ['paidVoice', 'Paid voice messages'], ['tipsGifts', 'Tips and gifts'], ['subscriptions', 'Monthly subscriptions'], ['innerCircle', 'Innercircle']].map(([key, label]) => ({ key, label, priced: PRICED.has(key) })) });
 }));
 r.get('/application/banks', asyncHandler(async (_q, res) => res.json(await listBanks())));
-const lookupLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const lookupLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } });
 r.post('/application/verify-account', lookupLimit, asyncHandler(async (req, res) => {
   const b = z.object({ accountNumber: z.string().regex(/^\d{10}$/, 'An account number has 10 digits'), bankCode: z.string().min(1).max(10) }).parse(req.body);
   res.json({ accountName: await resolveName(b) });
@@ -48,7 +48,8 @@ r.post('/application/verify-account', lookupLimit, asyncHandler(async (req, res)
 const servicesSchema = z.record(z.enum(SERVICE_KEYS), z.object({ enabled: z.boolean(), pricePoints: z.number().int().min(1).max(100000).optional() }));
 // Copies the creator's service choices onto the fields the rest of the app already reads (subscription price, request settings, innercircle price).
 // Innercircle is only SWITCHED ON later, after identity verification (Creator Studio).
-function applyServices(user, svc) {
+async function applyServices(user, svc) {
+  if (svc.innerCircle?.enabled && !(await isIdentityVerified(user._id))) throw new ApiError(403, 'Identity verification must be approved before turning on Innercircle', 'VERIFICATION_REQUIRED');
   user.services = { ...(user.services || {}) };
   for (const [k, v] of Object.entries(svc)) {
     if (PRICED.has(k) && v.enabled && !v.pricePoints && k !== 'specialRequests') throw new ApiError(400, `Set a price for ${k === 'paidVoice' ? 'paid voice messages' : k === 'innerCircle' ? 'Innercircle' : 'monthly subscriptions'}`);
@@ -75,7 +76,7 @@ r.post('/apply', asyncHandler(async (req, res) => {
   if (b.guidelinesVersion !== GUIDELINES_VERSION) throw new ApiError(409, 'The guidelines were updated. Please read and accept them again.', 'GUIDELINES_CHANGED');
   const holder = await resolveName(b.bank); // asked of the bank again: never trust what the browser says
   if (env.paymentProvider === 'paystack' && !namesOverlap(b.legalName, holder)) throw new ApiError(422, 'The name on this bank account does not match your legal name. Use an account in your own name.', 'NAME_MISMATCH');
-  applyServices(req.user, b.services);
+  await applyServices(req.user, b.services);
   await saveVerifiedAccount(req.user, b.bank); // re-verifies the name, registers the recipient, saves it (last 4 digits only)
   req.user.creatorApplication = { legalName: b.legalName, dob, phone: normPhone(b.phone), country: b.country, contentCategory: b.contentCategory, guidelinesAcceptedAt: new Date(), guidelinesVersion: GUIDELINES_VERSION, submittedAt: new Date() };
   req.user.category = 'Personal'; if (b.displayName) req.user.displayName = b.displayName; if (b.bio) req.user.bio = b.bio;
@@ -92,10 +93,10 @@ r.patch('/settings', requireCreator, asyncHandler(async (req, res) => {
   Object.assign(req.user, b); await req.user.save(); res.json({ ok: true });
 }));
 // Turn services on/off later and change their prices. Every creator chooses their own prices.
-r.get('/services', requireCreator, asyncHandler(async (req, res) => res.json({ services: req.user.services || {}, subscriptionPricePoints: req.user.subscriptionPricePoints, requestSettings: req.user.requestSettings, meetup: { pricePoints: req.user.meetup?.pricePoints || 0, enabled: !!req.user.meetup?.enabled } })));
+r.get('/services', requireCreator, asyncHandler(async (req, res) => res.json({ identityVerified: await isIdentityVerified(req.user._id), services: req.user.services || {}, subscriptionPricePoints: req.user.subscriptionPricePoints, requestSettings: req.user.requestSettings, meetup: { pricePoints: req.user.meetup?.pricePoints || 0, enabled: !!req.user.meetup?.enabled } })));
 r.patch('/services', requireCreator, asyncHandler(async (req, res) => {
   const { services } = z.object({ services: servicesSchema }).parse(req.body);
-  applyServices(req.user, services); await req.user.save(); res.json({ services: req.user.services });
+  await applyServices(req.user, services); await req.user.save(); res.json({ services: req.user.services });
 }));
 
 // Special requests: creators set their own price floor and rules (regular users cannot).

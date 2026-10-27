@@ -31,8 +31,15 @@ r.get('/suggestions', asyncHandler(async (req, res) => {
   res.json({ users: users.map((u) => ({ ...u, followers: cm[String(u._id)] || 0, following: false })) });
 }));
 
-r.get('/trending', asyncHandler(async (_q, res) => {
-  res.json(await cached('trending', 5 * 60e3, async () => {
+// Adds the real follower count and "do I follow them" to a list of people (never cached: it differs per viewer).
+async function withFollowState(users, meId) {
+  if (!users.length) return users; const ids = users.map((u) => u._id);
+  const [counts, mine] = await Promise.all([Follow.aggregate([{ $match: { followeeId: { $in: ids } } }, { $group: { _id: '$followeeId', n: { $sum: 1 } } }]), Follow.find({ followerId: meId, followeeId: { $in: ids } }).select('followeeId').lean()]);
+  const cm = Object.fromEntries(counts.map((c) => [String(c._id), c.n])); const F = new Set(mine.map((f) => String(f.followeeId)));
+  return users.map((u) => ({ ...u, followers: cm[String(u._id)] || 0, following: F.has(String(u._id)) }));
+}
+r.get('/trending', asyncHandler(async (req, res) => {
+  const base = await cached('trending', 5 * 60e3, async () => {
     const since = new Date(Date.now() - 7 * 864e5);
     const [topics, communities, creatorIds] = await Promise.all([
       Post.aggregate([{ $match: { status: 'PUBLISHED', access: 'PUBLIC', createdAt: { $gte: since }, 'moderation.status': { $nin: ['REMOVED', 'RESTRICTED'] }, communityId: { $exists: false } } }, { $unwind: '$tags' }, { $group: { _id: '$tags', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 10 }]),
@@ -41,7 +48,8 @@ r.get('/trending', asyncHandler(async (_q, res) => {
     ]);
     const creators = await User.find({ _id: { $in: creatorIds.map((c) => c.id) }, accountMode: 'CREATOR' }).select(U).lean();
     return { topics: topics.map((t) => ({ tag: t._id, count: t.count })), communities, creators };
-  }));
+  });
+  res.json({ ...base, creators: await withFollowState(base.creators.filter((c) => String(c._id) !== req.user.id), req.user._id) });
 }));
 
 // Popular hashtags that start with what you typed (or the overall popular ones when nothing is typed).
@@ -61,7 +69,6 @@ r.get('/search', asyncHandler(async (req, res) => {
     Community.find({ visibility: 'PUBLIC', status: { $ne: 'RESTRICTED' }, name: re }).limit(6).select('name description memberCount accessFeePoints').lean(),
     Post.aggregate([{ $match: { status: 'PUBLISHED', access: 'PUBLIC', tags: pre } }, { $unwind: '$tags' }, { $match: { tags: pre } }, { $group: { _id: '$tags', count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 6 }]),
   ]);
-  const f = await Follow.find({ followerId: req.user._id, followeeId: { $in: people.map((p) => p._id) } }).select('followeeId').lean(); const F = new Set(f.map((x) => String(x.followeeId)));
-  res.json({ people: people.map((p) => ({ ...p, following: F.has(String(p._id)) })), communities, topics: topics.map((t) => ({ tag: t._id, count: t.count })) });
+  res.json({ people: await withFollowState(people, req.user._id), communities, topics: topics.map((t) => ({ tag: t._id, count: t.count })) });
 }));
 export default r;

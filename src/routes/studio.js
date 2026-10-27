@@ -52,7 +52,7 @@ r.get('/analytics', requireCreator, asyncHandler(async (req, res) => {
 // the creator is notified when the transfer succeeds or fails.
 import { listBanks, resolveName, saveVerifiedAccount, maskedAccount } from '../services/bank.js';
 import rateLimit from 'express-rate-limit';
-const lookupLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
+const lookupLimit = rateLimit({ windowMs: 60 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } });
 const lagosDayStart = () => { const d = new Date(Date.now() + 3600e3); d.setUTCHours(0, 0, 0, 0); return new Date(d.getTime() - 3600e3); }; // midnight in Africa/Lagos (UTC+1, no DST)
 const payoutToday = (creatorId) => Payout.findOne({ creatorId, createdAt: { $gte: lagosDayStart() }, status: { $nin: ['FAILED', 'REVERSED'] } }).select('createdAt').lean();
 export const PAYOUT_ETA = 'Money is sent to your bank account within 24 to 48 hours.';

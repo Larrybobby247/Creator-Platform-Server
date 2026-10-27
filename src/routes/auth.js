@@ -36,10 +36,11 @@ async function issueVerification(u) {
   const token = crypto.randomBytes(32).toString('hex');
   u.emailVerifyHash = crypto.createHash('sha256').update(token).digest('hex'); u.emailVerifyExpires = new Date(Date.now() + 24 * 3600e3); u.emailVerifySentAt = new Date(); await u.save();
   const link = `${env.frontendUrl}/verify-email?token=${token}`;
-  if (env.emailEnabled || process.env.NODE_ENV === 'test') await sendEmail(u.email, 'Verify your email address', `Welcome! Confirm your email to activate your account (link valid for 24 hours):\n\n${link}`, { html: emailHtml({ title: 'Confirm your email', lines: ['Welcome! Confirm your email address to activate your account.', 'This link is valid for 24 hours.'], cta: { label: 'Verify my email', url: link } }) });
+  if (env.emailEnabled || process.env.NODE_ENV === 'test') return sendEmail(u.email, 'Verify your email address', `Welcome! Confirm your email to activate your account (link valid for 24 hours):\n\n${link}`, { html: emailHtml({ title: 'Confirm your email', lines: ['Welcome! Confirm your email address to activate your account.', 'This link is valid for 24 hours.'], cta: { label: 'Verify my email', url: link } }) });
   else if (!env.prod) console.log('[dev] email verification link:', link);
+  return true;
 }
-const sensitive = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
+const sensitive = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } });
 const dupe = (e) => { if (e.code === 11000) throw new ApiError(409, 'Username or email already used'); throw e; };
 
 r.post('/register', sensitive, asyncHandler(async (req, res) => {
@@ -47,8 +48,8 @@ r.post('/register', sensitive, asyncHandler(async (req, res) => {
   if (env.prod && !env.emailEnabled) throw new ApiError(503, 'Sign-up is temporarily unavailable (email service not configured)', 'EMAIL_NOT_CONFIGURED');
   const { acceptTerms, ...rest } = b;
   const u = await createUser({ ...rest, passwordHash: await bcrypt.hash(b.password, 12) }).catch(dupe);
-  await issueVerification(u);
-  res.status(201).json({ pendingVerification: true, email: u.email }); // deliberately no session cookie
+  const emailSent = await issueVerification(u);
+  res.status(201).json({ pendingVerification: true, email: u.email, emailSent }); // deliberately no session cookie
 }));
 
 r.post('/login', asyncHandler(async (req, res) => {
