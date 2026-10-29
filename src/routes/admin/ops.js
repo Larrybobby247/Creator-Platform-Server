@@ -21,7 +21,7 @@ r.get('/meetups', need('meetups.read'), asyncHandler(async (req, res) => {
 }));
 r.get('/meetups/:id', need('meetups.read'), asyncHandler(async (req, res) => {
   if (!isId(req.params.id)) throw new ApiError(400, 'Bad id'); const b = await MeetupBooking.findById(req.params.id).populate('userId creatorId', 'username displayName').populate('history.by', 'username').lean(); if (!b) throw new ApiError(404, 'Not found');
-  res.json({ booking: b, creatorVerified: await isIdentityVerified(b.creatorId._id), fundsNote: 'The meetup fee is held by the platform ledger until completion and the dispute window pass. It is not a bank escrow account. The transport fee is a separate payment.' });
+  res.json({ booking: b, creatorVerified: await isIdentityVerified(b.creatorId._id), fundsNote: 'The meetup fee is held by the platform ledger until completion and the dispute window pass. It is not a bank escrow account. The invitation fee is a separate payment.' });
 }));
 r.post('/meetups/:id/resolve', need('meetups.manage'), asyncHandler(async (req, res) => {
   const b = z.object({ outcome: z.enum(['refund', 'release']), reason }).parse(req.body); const m = await MeetupBooking.findOne({ _id: req.params.id, status: 'DISPUTED' }); if (!m) throw new ApiError(409, 'Only disputed bookings can be resolved here');
