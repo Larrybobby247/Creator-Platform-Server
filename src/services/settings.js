@@ -17,10 +17,12 @@ export const DEFAULTS = {
   // Prices are chosen freely by every creator (no price caps). Pro raises how many exclusive posts a creator can publish per month.
   planLimits: { exclusivePostsPerMonth: { DEFAULT: 10, PRO: 100 }, pinnedPosts: { USER: 1, DEFAULT: 1, PRO: 5 }, advancedAnalytics: { DEFAULT: false, PRO: true } },
   maxPriceCapPoints: 100000,                // sanity ceiling only (protects against typos like an extra zero)
-  platform: { name: 'Creator', tagline: 'Connect, support and earn.', supportEmail: 'support@example.com', logoUrl: '', currency: 'NGN', timezone: 'Africa/Lagos' },                   // set to provider's real fee
+  platform: { name: 'Privy', tagline: 'Connect, support and earn.', supportEmail: 'support@example.com', logoUrl: '', currency: 'NGN', timezone: 'Africa/Lagos' },                   // set to provider's real fee
 };
 export async function getSetting(key) {
   const row = await Setting.findOne({ key });
-  return row ? row.value : DEFAULTS[key];
+  const v = row ? row.value : DEFAULTS[key];
+  if (key === 'platform' && v && (v.name === 'Creator' || !v.name)) return { ...v, name: 'Privy' }; // the old default name is shown as Privy too
+  return v;
 }
 export const setSetting = (key, value) => Setting.findOneAndUpdate({ key }, { value }, { upsert: true, new: true });

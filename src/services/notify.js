@@ -11,7 +11,7 @@ export async function notify(recipientId, type, text, link = '') {
   emitToUser(recipientId, 'notification:new', n);
   const p = u?.prefs || {};
   if (PROMO_TYPES.has(type) && p.promoNotifs === false) return n;
-  if (p.push) sendPush(recipientId, { title: 'Creator', body: text, link }).catch(() => {});
+  if (p.push) sendPush(recipientId, { title: 'Privy', body: text, link }).catch(() => {});
   if (p.emailNotifs !== false && EMAIL_TYPES.has(type) && u?.email) sendEmail(u.email, 'Creator notification', `${text}\n\nOpen the app to view details.`).catch(() => {});
   return n;
 }
