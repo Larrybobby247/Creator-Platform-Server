@@ -12,6 +12,7 @@ import { Follow, Rating, Subscription, Community, CommunityMember } from '../mod
 import { signUrl } from '../services/media.js';
 import { shape } from './feed.js';
 import { isOnline } from '../realtime.js';
+import { isIdentityVerified } from '../services/verification.js';
 
 const r = Router();
 r.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please slow down.', code: 'RATE_LIMITED' } }));
@@ -31,7 +32,7 @@ r.get('/profile/:id', asyncHandler(async (req, res) => {
   const [followers, following, subscribers, rt] = await Promise.all([Follow.countDocuments({ followeeId: u._id }), Follow.countDocuments({ followerId: u._id }),
     u.accountMode === 'CREATOR' ? Subscription.countDocuments({ creatorId: u._id, status: 'ACTIVE', expiresAt: { $gt: new Date() } }) : 0,
     Rating.aggregate([{ $match: { creatorId: u._id, status: 'VISIBLE' } }, { $group: { _id: null, avg: { $avg: '$stars' }, n: { $sum: 1 } } }])]);
-  const pub = u.toObject(); const online = u.prefs?.showOnline !== false && isOnline(u._id); delete pub.prefs;
+  const pub = u.toObject(); if (pub.meetup?.enabled && !(await isIdentityVerified(u._id))) pub.meetup.enabled = false; const online = u.prefs?.showOnline !== false && isOnline(u._id); delete pub.prefs;
   res.json({ creator: { ...pub, online }, followers, following, subscribers, isFollowing: false, subscribed: false, rating: rt[0] ? { avg: Math.round(rt[0].avg * 10) / 10, count: rt[0].n } : null });
 }));
 

@@ -126,7 +126,8 @@ r.get('/:id', asyncHandler(async (req, res) => {
     Rating.aggregate([{ $match: { creatorId: u._id, status: 'VISIBLE' } }, { $group: { _id: null, avg: { $avg: '$stars' }, n: { $sum: 1 } } }]),
   ]);
   if (u.id !== req.user.id) User.updateOne({ _id: u._id }, { $inc: { profileViews: 1 } }).catch(() => {});
-  const pub = u.toObject(); const online = u.prefs?.showOnline !== false && isOnline(u._id); delete pub.prefs;
+  const pub = u.toObject(); if (pub.meetup?.enabled && !(await isIdentityVerified(u._id))) pub.meetup.enabled = false; // Innercircle is only shown for verified creators
+  const online = u.prefs?.showOnline !== false && isOnline(u._id); delete pub.prefs;
   res.json({ creator: { ...pub, online }, subscribers, followers, following, isFollowing: !!isFollowing, subscribed: !!sub, rating: rt[0] ? { avg: Math.round(rt[0].avg * 10) / 10, count: rt[0].n } : null });
 }));
 

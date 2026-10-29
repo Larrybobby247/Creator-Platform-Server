@@ -21,7 +21,7 @@ export async function transition(id, from, to, extra = {}, by) {
 }
 export async function refundBooking(b, { includeTransport }) {
   if (b.feeTxId) await reverse(b.feeTxId, 'meetup refund').catch(() => {});
-  if (includeTransport && b.transportTxId) await reverse(b.transportTxId, 'meetup transport refund').catch(() => {});
+  if (includeTransport && b.transportTxId) await reverse(b.transportTxId, 'Innercircle invitation fee refund').catch(() => {});
 }
 export async function releaseBooking(b) {
   const done = await transition(b._id, ['COMPLETED'], 'EARNINGS_RELEASED', {}, null);
