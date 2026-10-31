@@ -21,13 +21,15 @@ test('anyone can post, but only creators can post exclusive/paid content', async
   assert.equal((await user('POST', '/api/media/posts', { content: 'x', unlockPricePoints: 5 })).status, 403);
   assert.equal((await cr('POST', '/api/media/posts', { content: 'paid', access: 'EXCLUSIVE', unlockPricePoints: 3 })).status, 201);
 });
-test('any price is allowed; Pro raises the monthly exclusive-post limit', async (t) => {
-  if (!db) return t.skip(); const { c: d } = await creator(); const { c: p } = await creator({ creatorPlan: 'PRO' });
+test('any price is allowed; free plan is capped at 50 exclusive posts, Pro is unlimited', async (t) => {
+  if (!db) return t.skip(); const { c: d, u } = await creator(); const { c: p, u: pu } = await creator({ creatorPlan: 'PRO' });
   assert.equal((await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 500 })).status, 201);
-  assert.equal((await p('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 100 })).status, 201);
   assert.equal((await d('PATCH', '/api/creators/settings', { subscriptionPricePoints: 50 })).status, 200);
-  for (let i = 0; i < 9; i++) await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2 });
+  const { Post } = await import('../src/models/Social.js');
+  await Post.insertMany(Array.from({ length: 49 }, () => ({ authorId: u._id, content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2, status: 'PUBLISHED' })));
   const r = await d('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2 }); assert.equal(r.status, 403); assert.equal(r.json.code, 'PLAN_LIMIT');
+  await Post.insertMany(Array.from({ length: 60 }, () => ({ authorId: pu._id, content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2, status: 'PUBLISHED' })));
+  assert.equal((await p('POST', '/api/media/posts', { content: 'x', access: 'EXCLUSIVE', unlockPricePoints: 2 })).status, 201);
 });
 test('pinning respects the plan limit and creators can pin exclusive posts', async (t) => {
   if (!db) return t.skip(); const { c, u } = await creator(); const mkp = (o) => S.Post.create({ authorId: u._id, status: 'PUBLISHED', content: 'p', ...o });
