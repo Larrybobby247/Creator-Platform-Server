@@ -17,7 +17,7 @@ const r = Router();
 r.use(authenticate);
 const TTL = 24 * 3600e3, MAX_ACTIVE = 10;
 const MIME = { 'image/jpeg': ['IMAGE', '.jpg'], 'image/png': ['IMAGE', '.png'], 'image/webp': ['IMAGE', '.webp'], 'video/mp4': ['VIDEO', '.mp4'], 'video/webm': ['VIDEO', '.webm'], 'video/quicktime': ['VIDEO', '.mov'] };
-const BG = ['violet', 'pink', 'blue', 'green', 'amber'];
+const BG = ['violet', 'pink', 'blue', 'green', 'amber', 'teal', 'red', 'orange', 'indigo', 'slate']; // 10 status backgrounds
 const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan';
 
 // Add a status: a photo/video (video length follows your plan) or a short text card. Expires after 24 hours.

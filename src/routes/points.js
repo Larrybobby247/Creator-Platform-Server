@@ -39,14 +39,20 @@ r.post('/webhook', express.raw({ type: '*/*' }), asyncHandler(async (req, res) =
   res.sendStatus(200);
 }));
 
-async function settle(reference) {
+// Asks Paystack (server to server) what happened to this payment and credits the points exactly once. Safe to call any number of times.
+// Called from: the webhook, the page the user returns to after paying, the "Check status" button, and a background job that catches missed webhooks.
+export async function settle(reference) {
   const tx = await PointTransaction.findOne({ idempotencyKey: `purchase:${reference}`, type: 'POINT_PURCHASE' });
   if (!tx || tx.status !== 'PENDING') return tx;
-  const v = await paystack.verify(reference);
-  if (v.status !== 'success' || v.amount !== nairaToKobo(tx.nairaAmount) || v.currency !== 'NGN') return tx;
-  const done = await completeCredit(tx._id);
-  if (!done.duplicate) await afterPurchase(done.tx);
-  return done.tx;
+  let v; try { v = await paystack.verify(reference); } catch (e) { console.error('[points] could not verify', reference, e.message); return tx; }
+  if (v.status === 'success') {
+    if (v.amount !== nairaToKobo(tx.nairaAmount) || v.currency !== 'NGN') { console.error('[points] paid amount does not match', reference, { paid: v.amount, expected: nairaToKobo(tx.nairaAmount), currency: v.currency }); return tx; }
+    const done = await completeCredit(tx._id);
+    if (!done.duplicate) await afterPurchase(done.tx);
+    return done.tx;
+  }
+  if (v.status === 'failed' || (v.status === 'abandoned' && Date.now() - new Date(tx.createdAt).getTime() > 24 * 3600e3)) { tx.status = 'FAILED'; await tx.save(); } // never leave it "pending" forever
+  return tx;
 }
 
 r.use(authenticate);

@@ -42,17 +42,18 @@ r.post('/upload', authenticate, multer({ dest: os.tmpdir() }).single('file'), as
   } finally { fs.existsSync(f.path) && fs.unlinkSync(f.path); }
 }));
 
-const monthStart = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); };
 const priceOk = async (p) => { const cap = await getSetting('maxPriceCapPoints'); if (!Number.isInteger(p) || p < 1) throw new ApiError(400, 'Exclusive items need a price of at least 1 point'); if (p > cap) throw new ApiError(400, `That price looks too high (maximum ${cap} points).`, 'PRICE_TOO_HIGH'); };
 
 async function checkPostRules(user, { access, unlockPricePoints, gatedItems = 0 }) {
   if ((access !== 'PUBLIC' || gatedItems > 0) && !isCreator(user)) throw new ApiError(403, 'Only creators can post exclusive or subscriber-only content.', 'CREATOR_ONLY');
   if (unlockPricePoints > 0 && !isCreator(user)) throw new ApiError(403, 'Only creators can put a price on content.', 'CREATOR_ONLY');
   if (access === 'EXCLUSIVE') await priceOk(unlockPricePoints); // any price is allowed: only a sanity ceiling applies
-  if (access !== 'PUBLIC' || gatedItems > 0) { // Pro = more exclusive posts per month
+  if (access !== 'PUBLIC' || gatedItems > 0) { // Default plan: up to 50 exclusive posts. Pro: unlimited.
     const cap = (await limitsFor(user)).exclusivePostsPerMonth;
-    const used = await Post.countDocuments({ authorId: user._id, status: { $ne: 'DELETED' }, createdAt: { $gte: monthStart() }, $or: [{ access: { $ne: 'PUBLIC' } }, { 'media.access': { $in: ['EXCLUSIVE', 'SUBSCRIBERS'] } }] });
-    if (used >= cap) throw new ApiError(403, `You have reached your limit of ${cap} exclusive posts this month. Upgrade to Pro to post more.`, 'PLAN_LIMIT');
+    if (cap !== null) {
+      const used = await Post.countDocuments({ authorId: user._id, status: { $ne: 'DELETED' }, $or: [{ access: { $ne: 'PUBLIC' } }, { 'media.access': { $in: ['EXCLUSIVE', 'SUBSCRIBERS'] } }] });
+      if (used >= cap) throw new ApiError(403, `You have reached the limit of ${cap} exclusive posts on the free plan. Upgrade to Pro for unlimited exclusive posts.`, 'PLAN_LIMIT');
+    }
   }
 }
 

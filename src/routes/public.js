@@ -21,7 +21,7 @@ const FIELDS = 'username displayName bio avatarUrl coverUrl creatorPlan category
 const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan subscriptionPricePoints';
 const VISIBLE = { status: 'PUBLISHED', 'moderation.status': { $nin: ['REMOVED', 'RESTRICTED'] } };
 const findUser = async (idOrName) => {
-  const u = await User.findOne({ $or: [{ _id: oid(idOrName) ? idOrName : null }, { username: String(idOrName).toLowerCase() }], accountStatus: { $ne: 'SUSPENDED' }, emailVerified: true }).select(FIELDS);
+  const u = await User.findOne({ $or: [{ _id: oid(idOrName) ? idOrName : null }, { username: String(idOrName).toLowerCase() }], accountStatus: { $ne: 'SUSPENDED' }, emailVerified: { $ne: false } }).select(FIELDS);
   if (!u) throw new ApiError(404, 'Not found'); return u;
 };
 const cursorFilter = (c) => { if (!c) return null; const [t, id] = String(c).split('_'); const d = new Date(t); if (isNaN(d) || !oid(id)) return null; return { $or: [{ createdAt: { $lt: d } }, { createdAt: d, _id: { $lt: id } }] }; };
