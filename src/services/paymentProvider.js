@@ -7,8 +7,8 @@ import { ApiError } from '../utils/ApiError.js';
 const call = async (path, opts = {}) => {
   if (!env.paystackSecret) throw new ApiError(503, 'Payment provider not configured');
   const r = await fetch(`https://api.paystack.co${path}`, { ...opts, headers: { Authorization: `Bearer ${env.paystackSecret}`, 'Content-Type': 'application/json' } });
-  const j = await r.json();
-  if (!r.ok || !j.status) throw new ApiError(502, 'Payment provider error');
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.status) { console.error('[paystack]', path.split('?')[0], r.status, j.message || ''); throw new ApiError(502, 'Payment provider error'); } // the reason shows in your server logs
   return j.data;
 };
 export const initialize = ({ email, amountKobo, reference, callbackUrl }) =>

@@ -7,7 +7,7 @@ export const DEFAULTS = {
   maxUploadBytes: 200 * 1024 * 1024,
   pointPackages: [1, 5, 10, 50],
   promoPrices: { DAY1: 2, DAY3: 5, DAY7: 10 },   // placeholder points; admin-configurable
-  referralBps: 500, referralDays: 90, referralHoldDays: 7,
+  referralBps: 200, referralDays: 90, referralHoldDays: 7,
   meetupDisputeHours: 24, meetupRequestExpiryHours: 48,
   minPayoutPoints: 5,
   verificationFeeKobo: 0,
@@ -15,13 +15,16 @@ export const DEFAULTS = {
   previewMaxSec: 15, voiceMaxSec: 120, maxPurchasePoints: 10000,
   // Placeholder limits: set your real ones in the admin dashboard (Pricing & Fees).
   // Prices are chosen freely by every creator (no price caps). Pro raises how many exclusive posts a creator can publish per month.
-  planLimits: { exclusivePostsPerMonth: { DEFAULT: 10, PRO: 100 }, pinnedPosts: { USER: 1, DEFAULT: 1, PRO: 5 }, advancedAnalytics: { DEFAULT: false, PRO: true } },
+  planLimits: { exclusivePostsPerMonth: { DEFAULT: 50, PRO: 0 }, // despite the old key name: total exclusive posts on the Default plan (50). Pro is unlimited (this value is ignored for Pro)
+     pinnedPosts: { USER: 1, DEFAULT: 1, PRO: 5 }, advancedAnalytics: { DEFAULT: false, PRO: true } },
   maxPriceCapPoints: 100000,                // sanity ceiling only (protects against typos like an extra zero)
   platform: { name: 'Privy', tagline: 'Connect, support and earn.', supportEmail: 'support@example.com', logoUrl: '', currency: 'NGN', timezone: 'Africa/Lagos' },                   // set to provider's real fee
 };
 export async function getSetting(key) {
   const row = await Setting.findOne({ key });
   const v = row ? row.value : DEFAULTS[key];
+  if (key === 'referralBps' && v === 500) return 200; // the old 5% default is now 2%
+  if (key === 'planLimits' && v?.exclusivePostsPerMonth?.DEFAULT === 10) return { ...v, exclusivePostsPerMonth: { ...v.exclusivePostsPerMonth, DEFAULT: 50 } };
   if (key === 'platform' && v && (v.name === 'Creator' || !v.name)) return { ...v, name: 'Privy' }; // the old default name is shown as Privy too
   return v;
 }
