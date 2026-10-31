@@ -4,11 +4,19 @@ import { PointTransaction } from '../models/Finance.js';
 import { credit_ } from './helpers.js';
 import { transition, refundBooking, releaseBooking } from '../routes/meetups.js';
 import { notify } from '../services/notify.js';
+import { settle } from '../routes/points.js';
+import { env } from '../config/env.js';
 import { User } from '../models/User.js';
 
 export const jobStatus = {}; // read by the admin System Health page
 const safe = (name, fn) => async () => { const s = (jobStatus[name] ||= { runs: 0 }); try { await fn(); s.lastOkAt = new Date(); s.lastError = null; } catch (e) { s.lastError = String(e.message).slice(0, 200); s.lastErrorAt = new Date(); console.error(`job ${name} failed:`, e.message); } finally { s.runs++; s.lastRunAt = new Date(); } };
 
+// Safety net for payments whose webhook never arrived: re-check any purchase still pending after 30 seconds with Paystack, so points always land.
+const reconcilePurchases = async () => {
+  if (env.paymentProvider !== 'paystack') return;
+  const rows = await PointTransaction.find({ type: 'POINT_PURCHASE', status: 'PENDING', createdAt: { $gte: new Date(Date.now() - 3 * 864e5), $lte: new Date(Date.now() - 30e3) } }).sort({ createdAt: 1 }).limit(40);
+  for (const t of rows) { const ref = String(t.idempotencyKey || '').replace(/^purchase:/, ''); if (ref) await settle(ref).catch((e) => console.error('[reconcile]', ref, e.message)); }
+};
 const expirePromotions = async () => {
   const due = await Promotion.find({ status: 'ACTIVE', expiresAt: { $lte: new Date() } });
   for (const p of due) if (await Promotion.findOneAndUpdate({ _id: p._id, status: 'ACTIVE' }, { status: 'COMPLETED' })) await notify(p.ownerId, 'PROMOTION', 'Your promotion has ended', '/studio');
@@ -40,6 +48,6 @@ const approveReferrals = async () => {
 
 export function startJobs() {
   const every = (ms, name, fn) => setInterval(safe(name, fn), ms).unref();
-  every(60e3, 'promotions', expirePromotions); every(5 * 60e3, 'pro-plan', expirePro); every(60e3, 'subscriptions', expireSubscriptions);
+  every(60e3, 'purchase-reconcile', reconcilePurchases); every(60e3, 'promotions', expirePromotions); every(5 * 60e3, 'pro-plan', expirePro); every(60e3, 'subscriptions', expireSubscriptions);
   every(60e3, 'meetup-expiry', expireMeetups); every(60e3, 'meetup-release', releaseMeetups); every(5 * 60e3, 'referrals', approveReferrals);
 }
