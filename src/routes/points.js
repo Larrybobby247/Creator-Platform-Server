@@ -15,6 +15,7 @@ import { notify } from '../services/notify.js';
 import { Payout, PointPackage, WebhookLog } from '../models/Extra.js';
 
 const r = Router();
+const webhook = Router ();
 async function packagesList() { const rows = await PointPackage.find({ active: true }).sort({ order: 1, points: 1 }).select('name points bonusPoints').lean(); return rows.length ? rows : (await getSetting('pointPackages')).map((p) => ({ name: `${p} point${p === 1 ? '' : 's'}`, points: p, bonusPoints: 0 })); }
 // Credits any promotional bonus once, after the purchase itself completed.
 async function afterPurchase(tx) {
@@ -24,7 +25,7 @@ async function afterPurchase(tx) {
 }
 
 // Webhook: raw body + HMAC check + server-side re-verification + amount match. Credits exactly once.
-r.post('/webhook', express.raw({ type: '*/*' }), asyncHandler(async (req, res) => {
+webhook.post('/', express.raw({ type: '*/*' }), asyncHandler(async (req, res) => {
   if (!paystack.validSignature(req.body, req.headers['x-paystack-signature'])) throw new ApiError(401, 'Bad signature');
   const evt = JSON.parse(req.body.toString('utf8'));
   try {
@@ -113,4 +114,5 @@ r.get('/purchase/:reference/status', asyncHandler(async (req, res) => {
   if (!tx || String(tx.userId) !== String(req.user._id)) throw new ApiError(404, 'Not found');
   res.json({ status: tx.status, reason, detail: reason ? detail : undefined });
 }));
+export { webhook as pointsWebhook };
 export default r;
