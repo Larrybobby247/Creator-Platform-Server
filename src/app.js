@@ -10,7 +10,7 @@ import auth from './routes/auth.js';
 import publicRoutes from './routes/public.js';
 import creators from './routes/creators.js';
 import studio from './routes/studio.js';
-import points from './routes/points.js';
+import points, { pointsWebhook } from './routes/points.js';
 import gifts from './routes/gifts.js';
 import notes from './routes/notes.js';
 import messages from './routes/messages.js';
@@ -43,7 +43,7 @@ app.use(cors({ origin: [env.frontendUrl, env.adminUrl], credentials: true }));
 app.use(cookieParser());
 app.use('/uploads', express.static(env.publicDir, { maxAge: '365d', immutable: true, index: false })); // random file names => safe to cache forever
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
-app.use('/api/points/webhook', points); // raw-body route must be mounted before express.json
+app.use('/api/points/webhook', pointsWebhook); // raw-body route must be mounted before express.json
 app.use(express.json({ limit: '100kb' }));
 app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 100, message: { error: 'Too many attempts. Please wait a little and try again.', code: 'RATE_LIMITED' } }), auth);
 app.use('/api/public', publicRoutes); // no login needed: shared profile and community pages
