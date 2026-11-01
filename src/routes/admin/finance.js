@@ -90,7 +90,7 @@ r.post('/payouts/:id/send', need('payouts.review'), asyncHandler(async (req, res
   const p = await Payout.findById(req.params.id); if (!p || p.status !== 'PENDING') throw new ApiError(409, 'Only pending payouts can be sent');
   if (env.paymentProvider !== 'paystack' || !p.recipientCode) throw new ApiError(400, 'No automated transfer is available for this payout. Pay manually, then record the bank reference.');
   const c = await Payout.findOneAndUpdate({ _id: p._id, status: 'PENDING' }, { status: 'PROCESSING' }, { new: true }); if (!c) throw new ApiError(409, 'Already processing');
-  try { const t = await provider.transfer({ amountKobo: p.nairaAmount * 100, recipient: p.recipientCode, reference: p.reference, reason: 'Creator payout' }); c.transferCode = t.transfer_code; await c.save(); }
+  try { const t = await provider.transfer({ amountKobo: p.nairaAmount * 100, recipient: p.recipientCode, reference: String(p.reference).toLowerCase(), reason: 'Creator payout' }); c.transferCode = t.transfer_code; await c.save(); }
   catch (e) { c.status = 'PENDING'; await c.save(); throw e; }
   await audit(req, 'PAYOUT_TRANSFER_STARTED', p.id, { after: { naira: p.nairaAmount } }); res.json({ ok: true, note: 'Final status arrives from the provider webhook.' });
 }));
