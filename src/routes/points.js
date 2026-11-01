@@ -67,7 +67,25 @@ export async function settleDetailed(reference) {
   }
   if (v.status === 'success') {
     const expected = Math.round(nairaToKobo(tx.nairaAmount));
-    if (Number(v.amount) !== expected || v.currency !== 'NGN') { console.error('[points] paid amount does not match', mine, { paid: v.amount, expected, currency: v.currency }); return { tx, reason: 'AMOUNT_MISMATCH', detail: `paid ${v.amount} ${v.currency}, expected ${expected} NGN (kobo)` }; }
+
+// Paystack may add transaction fees to the amount charged.
+// requested_amount represents the original amount requested.
+const requestedAmount = Number(v.requested_amount ?? v.amount);
+
+if (requestedAmount !== expected || v.currency !== 'NGN') {
+  console.error('[points] paid amount does not match', mine, {
+    paid: v.amount,
+    requested: v.requested_amount,
+    expected,
+    currency: v.currency
+  });
+
+  return {
+    tx,
+    reason: 'AMOUNT_MISMATCH',
+    detail: `requested ${requestedAmount}, expected ${expected} NGN (kobo)`
+  };
+}
     const done = await completeCredit(tx._id);
     if (!done.duplicate) await afterPurchase(done.tx);
     return { tx: done.tx, reason: null };
