@@ -10,7 +10,7 @@ export const env = {
   frontendUrl: process.env.FRONTEND_URL,
   backendUrl: process.env.BACKEND_URL,
   paystackSecret: process.env.PAYSTACK_SECRET_KEY || '',
-  paymentProvider: prod && process.env.PAYMENT_PROVIDER === 'mock' ? 'paystack' : (process.env.PAYMENT_PROVIDER || 'mock'),
+  paymentProvider: prod && String(process.env.PAYMENT_PROVIDER || '').trim().toLowerCase() === 'mock' ? 'paystack' : (String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase()), // "Paystack ", "PAYSTACK" etc. all count as paystack
   vapidPublic: process.env.VAPID_PUBLIC_KEY || '', vapidPrivate: process.env.VAPID_PRIVATE_KEY || '', vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
   // Email goes out through Resend (https://resend.com). MAIL_FROM must use a domain you verified in Resend (or onboarding@resend.dev while testing).
   resendApiKey: process.env.RESEND_API_KEY || '', emailEnabled: !!process.env.RESEND_API_KEY, mailFrom: process.env.MAIL_FROM || 'Privy <onboarding@resend.dev>', publicDir: process.env.PUBLIC_DIR || './public-media',
