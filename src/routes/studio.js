@@ -80,7 +80,7 @@ r.post('/payouts', requireCreator, asyncHandler(async (req, res) => {
   if (await payoutToday(req.user._id)) throw new ApiError(429, 'You can only request one withdrawal per day. Please try again tomorrow.', 'PAYOUT_DAILY_LIMIT');
   const { availableToWithdraw, nairaPerPoint } = await earningsSummary(req.user._id);
   if (b.amountPoints > availableToWithdraw) throw new ApiError(400, 'Amount exceeds your available earnings');
-  const p = await Payout.create({ creatorId: req.user._id, amountPoints: b.amountPoints, nairaAmount: b.amountPoints * nairaPerPoint, bankName: acct.bankName, accountLast4: acct.accountLast4, accountName: acct.accountName, recipientCode: acct.recipientCode, reference: `PO_${crypto.randomBytes(8).toString('hex')}` });
+  const p = await Payout.create({ creatorId: req.user._id, amountPoints: b.amountPoints, nairaAmount: b.amountPoints * nairaPerPoint, bankName: acct.bankName, accountLast4: acct.accountLast4, accountName: acct.accountName, recipientCode: acct.recipientCode, reference: `po_${crypto.randomBytes(10).toString('hex')}` });
   await notify(req.user._id, 'PAYOUT', `Withdrawal of ₦${p.nairaAmount.toLocaleString('en-NG')} requested. ${PAYOUT_ETA}`, '/studio');
   res.status(201).json({ payout: p, message: PAYOUT_ETA });
 }));

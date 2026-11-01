@@ -31,7 +31,7 @@ r.post('/webhook', express.raw({ type: '*/*' }), asyncHandler(async (req, res) =
   if (evt.event === 'charge.success') await settle(evt.data.reference);
   if (['transfer.success', 'transfer.failed', 'transfer.reversed'].includes(evt.event)) {
     const st = { 'transfer.success': 'PAID', 'transfer.failed': 'FAILED', 'transfer.reversed': 'REVERSED' }[evt.event];
-    const p = await Payout.findOneAndUpdate({ reference: evt.data.reference, status: { $in: ['PROCESSING', 'PENDING'] } }, { status: st, failReason: evt.data.reason }, { new: true });
+    const p = await Payout.findOneAndUpdate({ reference: new RegExp(`^${String(evt.data.reference).replace(/[^a-z0-9_-]/gi, '')}$`, 'i'), status: { $in: ['PROCESSING', 'PENDING'] } }, { status: st, failReason: evt.data.reason }, { new: true });
     if (p) await notify(p.creatorId, 'PAYOUT', `Your withdrawal is ${st.toLowerCase()}`, '/studio'); // failed/reversed payouts return to available earnings automatically
   }
   await WebhookLog.create({ provider: 'paystack', event: evt.event, reference: evt.data?.reference, ok: true });
@@ -39,21 +39,42 @@ r.post('/webhook', express.raw({ type: '*/*' }), asyncHandler(async (req, res) =
   res.sendStatus(200);
 }));
 
+// Paystack only accepts letters, numbers, "-", "." and "=" in a transaction reference (no underscores). Older purchases were created with "pp_...";
+// if Paystack stored or returned those with the "_" removed, these helpers still match them up.
+const clean = (ref = '') => String(ref).replace(/[^A-Za-z0-9.=-]/g, '');
+async function findPurchase(reference) {
+  const exact = await PointTransaction.findOne({ idempotencyKey: `purchase:${reference}`, type: 'POINT_PURCHASE' });
+  if (exact) return exact;
+  const recent = await PointTransaction.find({ type: 'POINT_PURCHASE', status: 'PENDING', createdAt: { $gte: new Date(Date.now() - 7 * 864e5) } }).limit(200);
+  return recent.find((t) => clean(String(t.idempotencyKey).replace(/^purchase:/, '')) === clean(reference)) || null;
+}
+async function verifyAny(refs) { // tries each spelling until Paystack knows the payment
+  let last;
+  for (const ref of [...new Set(refs.filter(Boolean))]) { try { return { v: await paystack.verify(ref), ref }; } catch (e) { last = e; if (e.providerStatus && e.providerStatus !== 404) break; } }
+  throw last;
+}
 // Asks Paystack (server to server) what happened to this payment and credits the points exactly once. Safe to call any number of times.
 // Called from: the webhook, the page the user returns to after paying, the "Check status" button, and a background job that catches missed webhooks.
-export async function settle(reference) {
-  const tx = await PointTransaction.findOne({ idempotencyKey: `purchase:${reference}`, type: 'POINT_PURCHASE' });
-  if (!tx || tx.status !== 'PENDING') return tx;
-  let v; try { v = await paystack.verify(reference); } catch (e) { console.error('[points] could not verify', reference, e.message); return tx; }
+// Returns { tx, reason } where reason explains (in plain words) why a payment is still pending.
+export async function settleDetailed(reference) {
+  const tx = await findPurchase(reference);
+  if (!tx || tx.status !== 'PENDING') return { tx, reason: null };
+  const mine = String(tx.idempotencyKey).replace(/^purchase:/, '');
+  let v; try { ({ v } = await verifyAny([mine, reference, clean(mine)])); } catch (e) {
+    console.error('[points] could not verify', mine, e.providerStatus || '', e.providerMessage || e.message);
+    return { tx, reason: e.providerStatus === 404 ? 'NOT_FOUND' : e.providerStatus === 401 ? 'BAD_KEY' : 'VERIFY_ERROR', detail: e.providerMessage || e.message };
+  }
   if (v.status === 'success') {
-    if (v.amount !== nairaToKobo(tx.nairaAmount) || v.currency !== 'NGN') { console.error('[points] paid amount does not match', reference, { paid: v.amount, expected: nairaToKobo(tx.nairaAmount), currency: v.currency }); return tx; }
+    const expected = Math.round(nairaToKobo(tx.nairaAmount));
+    if (Number(v.amount) !== expected || v.currency !== 'NGN') { console.error('[points] paid amount does not match', mine, { paid: v.amount, expected, currency: v.currency }); return { tx, reason: 'AMOUNT_MISMATCH', detail: `paid ${v.amount} ${v.currency}, expected ${expected} NGN (kobo)` }; }
     const done = await completeCredit(tx._id);
     if (!done.duplicate) await afterPurchase(done.tx);
-    return done.tx;
+    return { tx: done.tx, reason: null };
   }
-  if (v.status === 'failed' || (v.status === 'abandoned' && Date.now() - new Date(tx.createdAt).getTime() > 24 * 3600e3)) { tx.status = 'FAILED'; await tx.save(); } // never leave it "pending" forever
-  return tx;
+  if (v.status === 'failed' || (v.status === 'abandoned' && Date.now() - new Date(tx.createdAt).getTime() > 24 * 3600e3)) { tx.status = 'FAILED'; await tx.save(); return { tx, reason: null }; } // never leave it "pending" forever
+  return { tx, reason: 'NOT_PAID', detail: v.gateway_response || v.status };
 }
+export const settle = async (reference) => (await settleDetailed(reference)).tx;
 
 r.use(authenticate);
 r.get('/wallet', asyncHandler(async (req, res) => {
@@ -71,7 +92,7 @@ r.post('/purchase', asyncHandler(async (req, res) => {
   const pkg = await PointPackage.findOne({ points, active: true }).lean(); const bonus = pkg?.bonusPoints || 0; // optional promotional bonus for matching packages
   const rate = await getSetting('nairaPerPoint');
   const naira = points * rate;
-  const reference = `pp_${crypto.randomBytes(10).toString('hex')}`;
+  const reference = `pp${crypto.randomBytes(10).toString('hex')}`; // letters and numbers only: the only characters Paystack accepts in a transaction reference (besides - . =)
   const tx = await createPendingCredit({ userId: req.user._id, type: 'POINT_PURCHASE', amount: points, nairaAmount: naira, idempotencyKey: `purchase:${reference}`, meta: { bonus } });
   if (env.paymentProvider === 'mock') return res.json({ mock: true, reference, points, naira }); // dev only; refused in production
   const init = await paystack.initialize({ email: req.user.email, amountKobo: nairaToKobo(naira), reference, callbackUrl: `${env.frontendUrl}/wallet?ref=${reference}` });
@@ -88,8 +109,8 @@ r.post('/purchase/:reference/mock-pay', asyncHandler(async (req, res) => {
 }));
 // Frontend calls this after redirect; it only triggers a SERVER-SIDE verify, never trusts the client.
 r.get('/purchase/:reference/status', asyncHandler(async (req, res) => {
-  const tx = await settle(req.params.reference);
+  const { tx, reason, detail } = await settleDetailed(req.params.reference);
   if (!tx || String(tx.userId) !== String(req.user._id)) throw new ApiError(404, 'Not found');
-  res.json({ status: tx.status });
+  res.json({ status: tx.status, reason, detail: reason ? detail : undefined });
 }));
 export default r;
