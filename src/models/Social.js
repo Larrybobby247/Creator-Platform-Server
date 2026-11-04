@@ -45,6 +45,8 @@ export const Conversation = mongoose.model('Conversation', new Schema({
 export const Message = mongoose.model('Message', new Schema({
   conversationId: { ...oid('Conversation'), index: true }, senderId: oid('User'),
   type: { type: String, enum: ['TEXT','IMAGE','VIDEO','VOICE','OFFER'], default: 'TEXT' }, text: String, mediaId: oid('MediaAsset'), replyTo: oid('Message'),
+  // Set when this message is a reply to someone's status (shown like WhatsApp: the status is quoted above the message).
+  storyRef: { storyId: oid('Story'), type: String, text: String, bg: String, hasMedia: Boolean, authorId: oid('User') },
   reactions: [{ userId: oid('User'), emoji: String }], price: { type: Number, default: 0 }, paidText: String, unlockedBy: [oid('User')], mediaType: String,
   deletedFor: [oid('User')], deletedForAll: { type: Boolean, default: false }, deletedAt: Date, // "delete for me" hides it only from that person; "delete for everyone" removes content for both
 }, { timestamps: true }));
