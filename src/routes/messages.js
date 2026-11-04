@@ -68,6 +68,27 @@ async function getOrCreateConv(from, toId) {
   return c;
 }
 
+
+/** Can `from` message `to` (the owner of a status)? Never throws: returns { ok } or { ok:false, code, reason } so the status viewer can explain WHY replying is not possible. */
+export async function replyAccess(from, to) {
+  if (!to || to.accountStatus === 'SUSPENDED') return { ok: false, code: 'UNAVAILABLE', reason: 'This account is not available, so you can’t reply to this status.' };
+  if (String(to._id) === String(from._id)) return { ok: false, code: 'OWN', reason: '' };
+  if (await Block.exists({ $or: [{ blockerId: to._id, blockedId: from._id }, { blockerId: from._id, blockedId: to._id }] })) return { ok: false, code: 'BLOCKED', reason: 'You can’t reply to this status.' };
+  const c = await Conversation.findOne({ participants: { $all: [from._id, to._id], $size: 2 } });
+  try { await enforceDmPolicy(from, to, c); } catch (e) {
+    if (e.code === 'DM_SUBSCRIBERS_ONLY') return { ok: false, code: e.code, reason: 'You can’t reply to this status because only subscribers can message this creator. Subscribe to their profile to reply.' };
+    if (e.code === 'DM_PAYMENT_REQUIRED') return { ok: false, code: e.code, reason: `You can’t reply to this status for free: this creator charges ${to.dmPolicy?.pricePoints || ''} points to start a conversation. Pay the message fee on their profile first.` };
+    throw e;
+  }
+  return { ok: true };
+}
+/** Sends a reply to a status as a normal direct message, with the status attached so the chat can show it (like WhatsApp). */
+export async function sendStatusReply(from, story, text) {
+  const c = await getOrCreateConv(from, story.authorId); // blocks, the creator's DM rules, and message requests are all enforced here
+  const m = await Message.create({ conversationId: c._id, senderId: from._id, text, storyRef: { storyId: story._id, type: story.type, text: story.text ? String(story.text).slice(0, 120) : undefined, bg: story.bg, hasMedia: !!story.mediaId, authorId: story.authorId } });
+  return deliver(c, m, from);
+}
+
 r.get('/unread-count', asyncHandler(async (req, res) => {
   const cs = await Conversation.find({ participants: req.user._id, archivedBy: { $ne: req.user._id } }).select('unread').lean();
   res.json({ count: cs.reduce((n, c) => n + (unreadOf(c, req.user._id)), 0) });
