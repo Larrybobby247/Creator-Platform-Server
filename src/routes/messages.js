@@ -85,7 +85,7 @@ export async function replyAccess(from, to) {
 /** Sends a reply to a status as a normal direct message, with the status attached so the chat can show it (like WhatsApp). */
 export async function sendStatusReply(from, story, text) {
   const c = await getOrCreateConv(from, story.authorId); // blocks, the creator's DM rules, and message requests are all enforced here
-  const m = await Message.create({ conversationId: c._id, senderId: from._id, text, storyRef: { storyId: story._id, type: story.type, text: story.text ? String(story.text).slice(0, 120) : undefined, bg: story.bg, hasMedia: !!story.mediaId, authorId: story.authorId } });
+  const m = await Message.create({ conversationId: c._id, senderId: from._id, text, storyRef: { storyId: story._id, kind: story.type, text: story.text ? String(story.text).slice(0, 120) : undefined, bg: story.bg, hasMedia: !!story.mediaId, authorId: story.authorId } });
   return deliver(c, m, from);
 }
 
