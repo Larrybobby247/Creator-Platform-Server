@@ -15,11 +15,15 @@ import { assertCanInteract } from '../utils/restrict.js';
 import { getSetting } from '../services/settings.js';
 import { assertVideoAllowed, storePrivate, signUrl } from '../services/media.js';
 
+import { planKey } from '../services/plans.js';
 const r = Router();
 r.use(authenticate);
 const TTL = 24 * 3600e3, MAX_ACTIVE = 10;
 const MIME = { 'image/jpeg': ['IMAGE', '.jpg'], 'image/png': ['IMAGE', '.png'], 'image/webp': ['IMAGE', '.webp'], 'video/mp4': ['VIDEO', '.mp4'], 'video/webm': ['VIDEO', '.webm'], 'video/quicktime': ['VIDEO', '.mov'] };
-const BG = ['violet', 'pink', 'blue', 'green', 'amber', 'teal', 'red', 'orange', 'indigo', 'slate']; // 10 status backgrounds
+const BG_FREE = ['violet', 'pink', 'blue', 'green', 'amber', 'teal', 'red', 'orange', 'indigo', 'slate']; // 10 gradient status backgrounds for everyone
+// Privy Pro palettes: flat colours (the app's own colours, no gradient) and the same colours with hand-drawn doodle line art. Must match client src/lib/statusBg.js.
+const BG_PRO = ['flat-violet', 'flat-pink', 'flat-blue', 'flat-green', 'flat-amber', 'flat-red', 'flat-ink', 'doodle-stars', 'doodle-hearts', 'doodle-waves', 'doodle-leaves', 'doodle-bolts', 'doodle-swirls', 'doodle-dots'];
+const BG = [...BG_FREE, ...BG_PRO];
 const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan';
 
 // Add a status: a photo/video (video length follows your plan) or a short text card. Expires after 24 hours.
@@ -27,6 +31,7 @@ r.post('/', multer({ dest: os.tmpdir() }).single('file'), asyncHandler(async (re
   const f = req.file; try {
     assertCanInteract(req.user);
     const b = z.object({ text: z.string().max(220).optional(), bg: z.enum(BG).optional() }).parse(req.body);
+    if (BG_PRO.includes(b.bg) && planKey(req.user) !== 'PRO') throw new ApiError(403, 'Flat and doodle colours are for Privy Pro creators.', 'PRO_ONLY');
     if ((await Story.countDocuments({ authorId: req.user._id, expiresAt: { $gt: new Date() } })) >= MAX_ACTIVE) throw new ApiError(409, `You can have up to ${MAX_ACTIVE} active statuses.`);
     let type = 'TEXT', mediaId;
     if (f) {

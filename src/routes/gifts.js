@@ -16,7 +16,7 @@ const r = Router();
 // Icons live on the server so every screen (catalogue, sent confirmation, notifications) shows the same emoji. Custom gifts always get the dragon.
 export const GIFT_ICON = { Heart: '❤️', Rose: '🌹', Star: '⭐', Diamond: '💎', Crown: '👑', Trophy: '🏆', 'Premium Gift': '🎁' };
 export const CUSTOM_ICON = '🐉'; export const CUSTOM_MIN = 100;
-const iconOf = (name) => GIFT_ICON[name] || '🎁';
+export const iconOf = (name) => GIFT_ICON[name] || '🎁';
 r.get('/catalogue', asyncHandler(async (_q, res) => { res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300'); const gifts = await Gift.find({ active: true }).sort('order').select('name description imageUrl pricePoints').lean(); res.json({ gifts: gifts.map((g) => ({ ...g, icon: iconOf(g.name) })), custom: { icon: CUSTOM_ICON, minPoints: CUSTOM_MIN } }); }));
 
 r.post('/send', authenticate, asyncHandler(async (req, res) => {

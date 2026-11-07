@@ -254,6 +254,24 @@ r.post('/:id/archive', asyncHandler(async (req, res) => { const c = await convFo
 // ---- delete messages ----
 // "me": hides the message from YOUR chat only. Works on anyone's message (yours or theirs), the other person is not affected.
 // "everyone": only the sender can do it. The content is erased for both people and media is removed from storage.
+// ---- edit a sent text message: 15 minutes for everyone, 30 minutes for Pro creators ----
+const EDIT_MIN = { DEFAULT: 15, USER: 15, PRO: 30 };
+r.post('/message/:messageId/edit', asyncHandler(async (req, res) => {
+  const { text } = z.object({ text: z.string().trim().min(1).max(2000) }).parse(req.body);
+  const m = await Message.findById(req.params.messageId); if (!m) throw new ApiError(404, 'Not found');
+  const c = await convFor(m.conversationId, req.user._id);
+  if (String(m.senderId) !== req.user.id) throw new ApiError(403, 'You can only edit your own messages.', 'NOT_SENDER');
+  if (m.deletedForAll) throw new ApiError(410, 'This message was deleted.');
+  if (m.type !== 'TEXT' || m.mediaId || m.price > 0) throw new ApiError(400, 'Only plain text messages can be edited.', 'NOT_EDITABLE');
+  const plan = planKey(req.user); const mins = EDIT_MIN[plan] || 15;
+  if (Date.now() - new Date(m.createdAt).getTime() > mins * 60_000) throw new ApiError(403, plan === 'PRO' ? `Messages can be edited for ${mins} minutes after sending.` : `Messages can be edited for ${mins} minutes after sending. Pro creators get ${EDIT_MIN.PRO} minutes.`, 'EDIT_WINDOW');
+  if (text === m.text) return res.json({ ok: true, message: shapeMsg(m, req.user._id) });
+  m.text = text; m.editedAt = new Date(); await m.save();
+  const latest = await Message.findOne({ conversationId: c._id }).sort('-createdAt').select('_id'); if (latest && String(latest._id) === m.id) { c.lastMessageText = previewOf(m); await c.save(); }
+  const patch = { _id: m.id, text: m.text, editedAt: m.editedAt };
+  for (const p of c.participants) emitToUser(p, 'message:update', { message: patch, conversationId: c.id });
+  res.json({ ok: true, message: shapeMsg(m, req.user._id) });
+}));
 r.post('/message/:messageId/delete', asyncHandler(async (req, res) => {
   const { scope } = z.object({ scope: z.enum(['me', 'everyone']) }).parse(req.body);
   const m = await Message.findById(req.params.messageId); if (!m) throw new ApiError(404, 'Not found');
