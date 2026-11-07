@@ -5,14 +5,16 @@ import fs from 'fs';
 import { z } from 'zod';
 import { Conversation, Message, MediaAsset } from '../models/Social.js';
 import { User } from '../models/User.js';
-import { Block, Subscription, ConversationLabel } from '../models/Extra.js';
+import { Block, Subscription, ConversationLabel, Notification } from '../models/Extra.js';
+import { notify } from '../services/notify.js';
+import { planKey } from '../services/plans.js';
 import { assertCanInteract } from '../utils/restrict.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ApiError } from '../utils/ApiError.js';
 import { emitToUser, isOnline } from '../realtime.js';
 import { getSetting } from '../services/settings.js';
-import { assertVideoAllowed, probeDuration, storePrivate, signUrl } from '../services/media.js';
+import { assertVideoAllowed, probeDuration, storePrivate, signUrl, makeBlurPreview } from '../services/media.js';
 import { deleteStored } from '../services/storage.js';
 import { spend } from '../services/pointLedger.js';
 import { recordEarning } from '../services/earnings.js';
@@ -21,6 +23,9 @@ const r = Router();
 r.use(authenticate);
 const unreadOf = (c, me) => Number((c.unread instanceof Map ? c.unread.get(String(me)) : c.unread?.[String(me)]) || 0);
 const other = (c, me) => c.participants.find((p) => String(p._id || p) !== String(me));
+// A reaction is ONE emoji: the quick five or anything from the person's keyboard (skin tones, ZWJ sequences, flags and keycaps included).
+const ONE_EMOJI = /^(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])*(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|[\u{1F3FB}-\u{1F3FF}])*)*)$/u;
+const previewOf = (m) => (m.type === 'TEXT' ? (m.text || '').slice(0, 120) : m.price > 0 ? '🔒 Paid message' : m.type === 'VOICE' ? '🎤 Voice message' : m.type === 'IMAGE' ? '📷 Photo' : '🎬 Video');
 const MIME = { 'image/jpeg': ['IMAGE', '.jpg'], 'image/png': ['IMAGE', '.png'], 'image/webp': ['IMAGE', '.webp'], 'video/mp4': ['VIDEO', '.mp4'], 'video/webm': ['VIDEO', '.webm'], 'video/quicktime': ['VIDEO', '.mov'],
   'audio/webm': ['VOICE', '.webm'], 'audio/ogg': ['VOICE', '.ogg'], 'audio/mp4': ['VOICE', '.m4a'], 'audio/mpeg': ['VOICE', '.mp3'], 'audio/wav': ['VOICE', '.wav'] };
 
@@ -32,13 +37,15 @@ export function shapeMsg(m, meId) {
   }
   const mine = String(o.senderId) === String(meId);
   const unlocked = mine || (o.unlockedBy || []).some((u) => String(u) === String(meId));
-  if (o.price > 0 && !unlocked) { delete o.paidText; delete o.mediaId; o.locked = true; }
+  if (o.price > 0 && !unlocked) { delete o.paidText; delete o.mediaId; o.locked = true; } // only the tiny blurPreview stays: the real media is never sent before payment
+  else delete o.blurPreview;
+  if (mine && o.price > 0) o.paidCount = (o.unlockedBy || []).length; // the creator sees "Paid ✓" once someone has bought it
   delete o.unlockedBy; delete o.deletedFor; return o;
 }
 const convFor = async (id, me) => { const c = await Conversation.findOne({ _id: id, participants: me }); if (!c) throw new ApiError(404, 'Conversation not found'); return c; };
 async function deliver(c, m, from, clientId) {
   const to = other(c, from._id);
-  c.lastMessageAt = new Date(); c.lastMessageText = m.type === 'TEXT' ? (m.text || '').slice(0, 120) : m.price > 0 ? '🔒 Paid message' : m.type === 'VOICE' ? '🎤 Voice message' : m.type === 'IMAGE' ? '📷 Photo' : '🎬 Video';
+  c.lastMessageAt = new Date(); c.lastMessageText = previewOf(m); c.hiddenBy = []; // a new message brings a deleted chat back for both people
   c.unread.set(String(to), (c.unread.get(String(to)) || 0) + 1);
   if (String(c.requestedBy) !== String(from._id)) c.accepted = true;
   if (m.price > 0) c.paid = true;
@@ -46,8 +53,13 @@ async function deliver(c, m, from, clientId) {
   await c.save();
   emitToUser(to, 'message:new', { message: { ...shapeMsg(m, to), clientId }, conversationId: c.id });
   const mine = { ...shapeMsg(m, from._id), clientId }; emitToUser(from._id, 'message:new', { message: mine, conversationId: c.id });
+  // In-app notification (notification tab) + phone push. One line per person, newest text wins; locked/paid content never leaks into it.
+  const who = from.displayName || from.username; const body = m.storyRef?.storyId ? `replied to your status: ${previewOf(m)}` : previewOf(m);
+  notify(to, 'MESSAGE', m.storyRef?.storyId ? `${who} ${body}` : `${who}: ${body}`, `/messages?to=${from.id}`, { title: who, tag: `msg:${from.id}`, collapse: true }).catch(() => {});
   return mine;
 }
+// Opening a chat means its message notification is read.
+const markMsgNotifRead = (me, otherId) => Notification.updateMany({ recipientId: me, type: 'MESSAGE', link: `/messages?to=${otherId}`, read: false }, { read: true }).catch(() => {});
 // Creators choose who may message them: everyone (OPEN), pay-to-message (PAID, subscribers free) or subscribers only.
 async function enforceDmPolicy(from, to, conv) {
   const mode = to.accountMode === 'CREATOR' ? to.dmPolicy?.mode : 'OPEN'; if (!mode || mode === 'OPEN') return;
@@ -85,12 +97,12 @@ export async function replyAccess(from, to) {
 /** Sends a reply to a status as a normal direct message, with the status attached so the chat can show it (like WhatsApp). */
 export async function sendStatusReply(from, story, text) {
   const c = await getOrCreateConv(from, story.authorId); // blocks, the creator's DM rules, and message requests are all enforced here
-  const m = await Message.create({ conversationId: c._id, senderId: from._id, text, storyRef: { storyId: story._id, kind: story.type, text: story.text ? String(story.text).slice(0, 120) : undefined, bg: story.bg, hasMedia: !!story.mediaId, authorId: story.authorId } });
+  const m = await Message.create({ conversationId: c._id, senderId: from._id, text, storyRef: { storyId: story._id, kind: story.type, text: story.text ? String(story.text).slice(0, 120) : undefined, bg: story.bg, hasMedia: !!story.mediaId, authorId: story.authorId, expiresAt: story.expiresAt } });
   return deliver(c, m, from);
 }
 
 r.get('/unread-count', asyncHandler(async (req, res) => {
-  const cs = await Conversation.find({ participants: req.user._id, archivedBy: { $ne: req.user._id } }).select('unread').lean();
+  const cs = await Conversation.find({ participants: req.user._id, archivedBy: { $ne: req.user._id }, hiddenBy: { $ne: req.user._id } }).select('unread').lean();
   res.json({ count: cs.reduce((n, c) => n + (unreadOf(c, req.user._id)), 0) });
 }));
 
@@ -114,7 +126,7 @@ r.post('/:id/label', asyncHandler(async (req, res) => {
 
 r.get('/conversations', asyncHandler(async (req, res) => {
   const me = req.user._id, cat = String(req.query.category || 'all');
-  const q = { participants: me };
+  const q = { participants: me, hiddenBy: { $ne: me } };
   if (cat === 'archived') q.archivedBy = me; else q.archivedBy = { $ne: me };
   if (cat === 'unread') q[`unread.${me}`] = { $gt: 0 };
   if (cat === 'requests') { q.accepted = false; q.requestedBy = { $ne: me }; }
@@ -124,10 +136,16 @@ r.get('/conversations', asyncHandler(async (req, res) => {
     const subs = await Subscription.find({ creatorId: me, status: 'ACTIVE', expiresAt: { $gt: new Date() } }).select('subscriberId').lean(); q.$and = [{ participants: { $in: subs.map((s) => s.subscriberId) } }];
   }
   if (cat.startsWith('label:')) { const id = cat.slice(6); if (!/^[0-9a-f]{24}$/i.test(id)) return res.json({ items: [] }); q.labels = { $elemMatch: { userId: me, labelId: id } }; }
-  let items = await Conversation.find(q).sort('-lastMessageAt').limit(50).select('-__v').populate('participants', 'username displayName avatarUrl accountMode prefs').lean();
+  const POP = 'username displayName avatarUrl accountMode prefs';
+  let items = await Conversation.find(q).sort('-lastMessageAt').limit(50).select('-__v').populate('participants', POP).lean();
+  // Pinned chats always make the list, even if they are older than the 50 newest, and sit on top.
+  const pinnedIds = new Set(); const mineOnly = (c) => (c.pinnedBy || []).some((p) => String(p.userId) === String(me));
+  if (cat !== 'archived') { const have = new Set(items.map((c) => String(c._id))); const extra = await Conversation.find({ ...q, 'pinnedBy.userId': me, _id: { $nin: [...have] } }).select('-__v').populate('participants', POP).lean(); items = items.concat(extra); }
+  items.forEach((c) => mineOnly(c) && pinnedIds.add(String(c._id)));
+  items.sort((a, b) => (Number(pinnedIds.has(String(b._id))) - Number(pinnedIds.has(String(a._id)))) || (new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0)));
   if (cat === 'creators') items = items.filter((c) => other(c, me)?.accountMode === 'CREATOR');
   if (cat === 'users') items = items.filter((c) => other(c, me)?.accountMode === 'USER');
-  res.json({ items: items.map((c) => { const o = { ...c }; const p = other(c, me); o.unreadCount = unreadOf(c, me); delete o.unread; o.myLabelIds = (c.labels || []).filter((l) => String(l.userId) === String(me)).map((l) => String(l.labelId)); delete o.labels; delete o.dmPaid; o.online = p?.prefs?.showOnline !== false && isOnline(p?._id); return o; }) });
+  res.json({ items: items.map((c) => { const o = { ...c }; const p = other(c, me); o.unreadCount = unreadOf(c, me); delete o.unread; o.pinned = pinnedIds.has(String(c._id)); delete o.pinnedBy; delete o.hiddenBy; o.myLabelIds = (c.labels || []).filter((l) => String(l.userId) === String(me)).map((l) => String(l.labelId)); delete o.labels; delete o.dmPaid; o.online = p?.prefs?.showOnline !== false && isOnline(p?._id); return o; }) });
 }));
 
 // Pay a creator's message fee once (subscribers never pay). After this you can message them freely.
@@ -149,6 +167,7 @@ r.post('/dm-access', asyncHandler(async (req, res) => {
 r.post('/:id/read', asyncHandler(async (req, res) => {
   const c = await convFor(req.params.id, req.user._id);
   if (unreadOf(c, req.user._id) > 0) { c.unread.set(String(req.user._id), 0); await c.save(); }
+  markMsgNotifRead(req.user._id, other(c, req.user._id));
   emitToUser(other(c, req.user._id), 'conversation:read', { conversationId: c.id, by: req.user.id }); res.json({ ok: true });
 }));
 r.get('/presence/:userId', asyncHandler(async (req, res) => {
@@ -158,7 +177,7 @@ r.get('/presence/:userId', asyncHandler(async (req, res) => {
 }));
 r.get('/:conversationId', asyncHandler(async (req, res) => {
   const c = await convFor(req.params.conversationId, req.user._id);
-  if (!req.query.before) { c.unread.set(String(req.user._id), 0); await c.save(); emitToUser(other(c, req.user._id), 'conversation:read', { conversationId: c.id, by: req.user.id }); }
+  if (!req.query.before) { c.unread.set(String(req.user._id), 0); await c.save(); markMsgNotifRead(req.user._id, other(c, req.user._id)); emitToUser(other(c, req.user._id), 'conversation:read', { conversationId: c.id, by: req.user.id }); }
   const before = req.query.before ? new Date(String(req.query.before)) : null;
   const rows = await Message.find({ conversationId: c._id, deletedFor: { $ne: req.user._id }, ...(before && !isNaN(before) ? { createdAt: { $lt: before } } : {}) }).sort('-createdAt').limit(41).lean();
   const hasMore = rows.length > 40; if (hasMore) rows.pop(); rows.reverse(); // newest 40, oldest first
@@ -187,9 +206,10 @@ r.post('/attachment', up, asyncHandler(async (req, res) => {
     let durationSec;
     if (kind[0] === 'VIDEO') durationSec = await assertVideoAllowed(f.path, req.user.creatorPlan);
     if (kind[0] === 'VOICE') { durationSec = await probeDuration(f.path); const lim = await getSetting('voiceMaxSec'); if (durationSec > lim + 0.5) throw new ApiError(422, `Voice messages can be up to ${lim}s`, 'VOICE_TOO_LONG'); }
+    const blurPreview = b.price > 0 && kind[0] !== 'VOICE' ? await makeBlurPreview(f.path, kind[0] === 'VIDEO', durationSec) : undefined; // made BEFORE the file is stored/removed
     const key = await storePrivate(f.path, kind[1]);
     const a = await MediaAsset.create({ ownerId: req.user._id, storageKey: key, mediaType: kind[0] === 'VOICE' ? 'AUDIO' : kind[0], mimeType: f.mimetype, size: f.size, durationSec });
-    const m = await Message.create({ conversationId: c._id, senderId: req.user._id, type: kind[0], mediaType: kind[0], mediaId: a._id, text: b.caption, replyTo: b.replyTo, price: b.price });
+    const m = await Message.create({ conversationId: c._id, senderId: req.user._id, type: kind[0], mediaType: kind[0], mediaId: a._id, text: b.caption, replyTo: b.replyTo, price: b.price, blurPreview });
     res.status(201).json(await deliver(c, m, req.user, b.clientId));
   } finally { if (f && fs.existsSync(f.path)) fs.unlinkSync(f.path); }
 }));
@@ -210,7 +230,7 @@ r.post('/message/:messageId/unlock', asyncHandler(async (req, res) => {
   if (!duplicate) { await Message.updateOne({ _id: m._id }, { $addToSet: { unlockedBy: req.user._id } }); await recordEarning({ creatorId: m.senderId, sourceTx: tx, gross: m.price, label: 'paid message' }); }
   else await Message.updateOne({ _id: m._id }, { $addToSet: { unlockedBy: req.user._id } });
   const fresh = await Message.findById(m._id); const out = shapeMsg(fresh, req.user._id);
-  emitToUser(m.senderId, 'message:update', { message: { _id: m.id, unlockedByOther: true }, conversationId: c.id });
+  emitToUser(m.senderId, 'message:update', { message: { _id: m.id, paidCount: (fresh.unlockedBy || []).length }, conversationId: c.id });
   res.json(out);
 }));
 // Signed, short-lived URL for a message's media. Only conversation participants; paid media only after unlock.
@@ -221,7 +241,7 @@ r.get('/message/:messageId/media', asyncHandler(async (req, res) => {
   res.json({ url: signUrl(m.mediaId, req.user.id, 300) });
 }));
 r.post('/message/:messageId/react', asyncHandler(async (req, res) => {
-  const { emoji } = z.object({ emoji: z.enum(['❤️', '👍', '😂', '😮', '🔥']) }).parse(req.body);
+  const { emoji } = z.object({ emoji: z.string().min(1).max(32).refine((e) => ONE_EMOJI.test(e), 'Pick a single emoji') }).parse(req.body);
   const m = await Message.findById(req.params.messageId); if (!m) throw new ApiError(404, 'Not found');
   const c = await convFor(m.conversationId, req.user._id);
   m.reactions = m.reactions.filter((x) => String(x.userId) !== req.user.id); if (!req.body.remove) m.reactions.push({ userId: req.user._id, emoji }); await m.save();
@@ -249,7 +269,7 @@ r.post('/message/:messageId/delete', asyncHandler(async (req, res) => {
   for (const p of c.participants) emitToUser(p, 'message:deleted', { messageId: m.id, conversationId: c.id, scope: 'everyone' });
   res.json({ ok: true, scope });
 }));
-const lastText = (m) => (m.type === 'TEXT' ? (m.text || '').slice(0, 120) : m.price > 0 ? '🔒 Paid message' : m.type === 'VOICE' ? '🎤 Voice message' : m.type === 'IMAGE' ? '📷 Photo' : '🎬 Video');
+const lastText = previewOf;
 
 // ---- change the category of a conversation (one category at a time; null = no category) ----
 r.post('/:id/category', asyncHandler(async (req, res) => {
@@ -260,6 +280,27 @@ r.post('/:id/category', asyncHandler(async (req, res) => {
   if (labelId) await Conversation.updateOne({ _id: c._id }, { $push: { labels: { userId: req.user._id, labelId } } });
   res.json({ ok: true, labelId });
 }));
+// ---- pin a chat to the top: up to 3 for everyone, 5 for Pro creators ----
+r.post('/:id/pin', asyncHandler(async (req, res) => {
+  const c = await convFor(req.params.id, req.user._id); const me = String(req.user._id);
+  if ((c.pinnedBy || []).some((p) => String(p.userId) === me)) { await Conversation.updateOne({ _id: c._id }, { $pull: { pinnedBy: { userId: req.user._id } } }); return res.json({ ok: true, pinned: false }); }
+  const limit = planKey(req.user) === 'PRO' ? 5 : 3;
+  const n = await Conversation.countDocuments({ participants: req.user._id, hiddenBy: { $ne: req.user._id }, 'pinnedBy.userId': req.user._id });
+  if (n >= limit) throw new ApiError(409, limit === 5 ? 'You can pin up to 5 chats.' : 'You can pin up to 3 chats. Go Pro to pin up to 5.', 'PIN_LIMIT');
+  await Conversation.updateOne({ _id: c._id }, { $push: { pinnedBy: { userId: req.user._id, at: new Date() } } }); res.json({ ok: true, pinned: true, limit });
+}));
+// ---- delete a chat (for me only): hides the thread and clears my copy of its messages. The other person keeps theirs. A new message brings the chat back (empty of the old messages).
+const wipeFor = async (convIds, me) => {
+  if (!convIds.length) return;
+  await Message.updateMany({ conversationId: { $in: convIds } }, { $addToSet: { deletedFor: me } });
+  await Conversation.updateMany({ _id: { $in: convIds } }, { $addToSet: { hiddenBy: me }, $pull: { pinnedBy: { userId: me }, archivedBy: me }, $set: { [`unread.${me}`]: 0 } });
+  await Notification.updateMany({ recipientId: me, type: 'MESSAGE', read: false }, { read: true });
+};
+r.post('/delete-all', asyncHandler(async (req, res) => { // registered before '/:id/...' routes; "delete-all" is not an id
+  const ids = (await Conversation.find({ participants: req.user._id, hiddenBy: { $ne: req.user._id } }).select('_id').lean()).map((c) => c._id);
+  await wipeFor(ids, req.user._id); res.json({ ok: true, count: ids.length });
+}));
+r.post('/:id/delete', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await wipeFor([c._id], req.user._id); res.json({ ok: true }); }));
 r.post('/:id/unarchive', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await Conversation.updateOne({ _id: c._id }, { $pull: { archivedBy: req.user._id } }); res.json({ ok: true }); }));
 
 // ---- presence: only people who allow it are shown as online ----

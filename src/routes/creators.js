@@ -136,7 +136,7 @@ r.get('/:id/gifts', asyncHandler(async (req, res) => {
   if (!c) throw new ApiError(404, 'Not found');
   const agg = await GiftTransaction.aggregate([{ $match: { recipientId: c._id, status: 'COMPLETED' } }, { $group: { _id: '$giftId', quantity: { $sum: '$quantity' }, pointsSpent: { $sum: '$grossPoints' } } }]);
   const gifts = await Gift.find({ _id: { $in: agg.map((a) => a._id) } });
-  const out = { items: agg.map((a) => ({ gift: gifts.find((g) => g.id === String(a._id)), quantity: a.quantity, pointsSpent: a.pointsSpent })) };
+  const out = { items: agg.map((a) => ({ gift: a._id ? gifts.find((g) => g.id === String(a._id)) : { _id: 'custom', name: '🐉 Custom gift' }, quantity: a.quantity, pointsSpent: a.pointsSpent })) }; // custom gifts have no catalogue entry (giftId is empty)
   if (c.showGiftSenders) out.recent = await GiftTransaction.find({ recipientId: c._id }).sort('-createdAt').limit(20).populate('senderId', 'username avatarUrl');
   res.json(out);
 }));
