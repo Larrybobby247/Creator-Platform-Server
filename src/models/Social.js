@@ -50,7 +50,7 @@ export const Message = mongoose.model('Message', new Schema({
   // Set when this message is a reply to someone's status (shown like WhatsApp: the status is quoted above the message).
   storyRef: { storyId: oid('Story'), kind: String, text: String, bg: String, hasMedia: Boolean, authorId: oid('User'), expiresAt: Date }, // not named "type": Mongoose would read that as the data type of the whole field
   reactions: [{ userId: oid('User'), emoji: String }], price: { type: Number, default: 0 }, blurPreview: String, paidText: String, unlockedBy: [oid('User')], mediaType: String,
-  deletedFor: [oid('User')], deletedForAll: { type: Boolean, default: false }, deletedAt: Date, // "delete for me" hides it only from that person; "delete for everyone" removes content for both
+  deletedFor: [oid('User')], deletedForAll: { type: Boolean, default: false }, deletedAt: Date, editedAt: Date, // "delete for me" hides it only from that person; "delete for everyone" removes content for both
 }, { timestamps: true }));
 
 export const ConversationNote = mongoose.model('ConversationNote', new Schema({
