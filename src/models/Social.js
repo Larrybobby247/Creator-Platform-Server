@@ -31,7 +31,7 @@ export const Gift = mongoose.model('Gift', new Schema({
   pricePoints: { type: Number, required: true, min: 1 }, active: { type: Boolean, default: true }, order: { type: Number, default: 0 },
 }));
 export const GiftTransaction = mongoose.model('GiftTransaction', new Schema({
-  senderId: oid('User'), recipientId: oid('User'), giftId: oid('Gift'), quantity: Number,
+  senderId: oid('User'), recipientId: oid('User'), giftId: oid('Gift'), quantity: Number, custom: { type: Boolean, default: false },
   grossPoints: Number, commissionPoints: Number, netPoints: Number, transactionId: oid('PointTransaction'),
   status: { type: String, default: 'COMPLETED' },
 }, { timestamps: true }));
@@ -41,13 +41,15 @@ export const Conversation = mongoose.model('Conversation', new Schema({
   unread: { type: Map, of: Number, default: {} },
   accepted: { type: Boolean, default: true }, requestedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   archivedBy: [oid('User')], paid: { type: Boolean, default: false }, dmPaid: [oid('User')], labels: [{ userId: oid('User'), labelId: oid('ConversationLabel') }],
+  pinnedBy: [{ _id: false, userId: oid('User'), at: { type: Date, default: Date.now } }], // chats each person pinned to the top (max 3 free / 5 pro)
+  hiddenBy: [oid('User')], // "delete chat": hidden from that person's list until a new message arrives
 }, { timestamps: true }));
 export const Message = mongoose.model('Message', new Schema({
   conversationId: { ...oid('Conversation'), index: true }, senderId: oid('User'),
   type: { type: String, enum: ['TEXT','IMAGE','VIDEO','VOICE','OFFER'], default: 'TEXT' }, text: String, mediaId: oid('MediaAsset'), replyTo: oid('Message'),
   // Set when this message is a reply to someone's status (shown like WhatsApp: the status is quoted above the message).
-  storyRef: { storyId: oid('Story'), kind: String, text: String, bg: String, hasMedia: Boolean, authorId: oid('User') }, // not named "type": Mongoose would read that as the data type of the whole field
-  reactions: [{ userId: oid('User'), emoji: String }], price: { type: Number, default: 0 }, paidText: String, unlockedBy: [oid('User')], mediaType: String,
+  storyRef: { storyId: oid('Story'), kind: String, text: String, bg: String, hasMedia: Boolean, authorId: oid('User'), expiresAt: Date }, // not named "type": Mongoose would read that as the data type of the whole field
+  reactions: [{ userId: oid('User'), emoji: String }], price: { type: Number, default: 0 }, blurPreview: String, paidText: String, unlockedBy: [oid('User')], mediaType: String,
   deletedFor: [oid('User')], deletedForAll: { type: Boolean, default: false }, deletedAt: Date, // "delete for me" hides it only from that person; "delete for everyone" removes content for both
 }, { timestamps: true }));
 
