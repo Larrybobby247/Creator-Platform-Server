@@ -21,6 +21,17 @@ function probeByPackets(file) {
     p.on('close', () => { const t = out.split('\n').map(parseFloat).filter(Number.isFinite); t.length ? resolve(Math.max(...t)) : reject(new Error('no packets')); });
   });
 }
+/** A tiny (about 32px wide) JPEG of an image, or of a frame of a video, returned as a data URL. Used to show a very blurry teaser of paid chat media:
+ *  the real picture is never sent to someone who has not paid, only this thumbnail, which is too small to recognise even without the blur. Returns null if ffmpeg is missing. */
+export function makeBlurPreview(file, isVideo, durationSec = 0) {
+  return new Promise((resolve) => {
+    const at = isVideo ? Math.max(0, Math.min(1, (durationSec || 0) / 2)) : 0;
+    const args = ['-v', 'error', ...(isVideo ? ['-ss', String(at)] : []), '-i', file, '-frames:v', '1', '-vf', 'scale=32:-2', '-q:v', '10', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'];
+    let p; try { p = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args); } catch { return resolve(null); }
+    const chunks = []; p.stdout.on('data', (d) => chunks.push(d)); p.on('error', () => resolve(null));
+    p.on('close', (c) => { const b = Buffer.concat(chunks); resolve(c === 0 && b.length > 100 && b.length < 20000 ? `data:image/jpeg;base64,${b.toString('base64')}` : null); });
+  });
+}
 export async function assertVideoAllowed(file, plan, maxOverride) {
   const limits = await getSetting('videoLimitSec');
   const max = Math.min(maxOverride ?? Infinity, limits[plan] ?? limits.DEFAULT);
