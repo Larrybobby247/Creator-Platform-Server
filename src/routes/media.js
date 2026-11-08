@@ -12,7 +12,7 @@ import { Subscription } from '../models/Extra.js';
 import { PointTransaction } from '../models/Finance.js';
 import { getSetting } from '../services/settings.js';
 import { limitsFor } from '../services/plans.js';
-import { assertVideoAllowed, storePrivate, signUrl, verifySig } from '../services/media.js';
+import { assertVideoAllowed, storePrivate, signUrl, verifySig, parseTrim, trimVideo } from '../services/media.js';
 import { sendStored } from '../services/storage.js';
 import { spend } from '../services/pointLedger.js';
 import { recordEarning } from '../services/earnings.js';
@@ -35,11 +35,13 @@ r.post('/upload', authenticate, multer({ dest: os.tmpdir() }).single('file'), as
     const isVideo = f.mimetype.startsWith('video/'); const isPreview = req.query.kind === 'preview';
     if (isPreview && !isVideo) throw new ApiError(400, 'A preview must be a short video clip');
     if (isPreview && !isCreator(req.user)) throw new ApiError(403, 'Only creators can add previews');
+    let trimmed = null; const trim = isVideo ? parseTrim(req.body) : null; // the person chose which part of the video to keep
+    if (trim) { trimmed = await trimVideo(f.path, trim); f.trimmedFrom = f.path; f.path = trimmed; f.mimetype = 'video/mp4'; f.size = fs.statSync(trimmed).size; }
     const durationSec = isVideo ? await assertVideoAllowed(f.path, req.user.creatorPlan, isPreview ? await getSetting('previewMaxSec') : undefined) : undefined; // server-verified
     const storageKey = await storePrivate(f.path, ALLOWED[f.mimetype]);
     const a = await MediaAsset.create({ ownerId: req.user._id, storageKey, mediaType: isVideo ? 'VIDEO' : 'IMAGE', mimeType: f.mimetype, size: f.size, durationSec });
     res.status(201).json({ id: a.id, durationSec, mediaType: a.mediaType });
-  } finally { fs.existsSync(f.path) && fs.unlinkSync(f.path); }
+  } finally { for (const p of [f.path, f.trimmedFrom]) p && fs.existsSync(p) && fs.unlinkSync(p); }
 }));
 
 const priceOk = async (p) => { const cap = await getSetting('maxPriceCapPoints'); if (!Number.isInteger(p) || p < 1) throw new ApiError(400, 'Exclusive items need a price of at least 1 point'); if (p > cap) throw new ApiError(400, `That price looks too high (maximum ${cap} points).`, 'PRICE_TOO_HIGH'); };

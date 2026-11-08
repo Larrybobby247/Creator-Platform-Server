@@ -90,7 +90,9 @@ r.post('/requests', asyncHandler(async (req, res) => {
 }));
 r.get('/requests', asyncHandler(async (req, res) => {
   const role = req.query.as === 'creator' ? 'creatorId' : 'userId';
-  res.json({ items: await SpecialRequest.find({ [role]: req.user._id }).sort('-createdAt').limit(50).populate('userId creatorId', 'username displayName') });
+  const items = await SpecialRequest.find({ [role]: req.user._id }).sort('-createdAt').limit(50).populate('userId creatorId', 'username displayName avatarUrl');
+  const done = role === 'userId' ? new Set((await Rating.find({ reviewerId: req.user._id, qualifyingId: { $in: items.map((i) => i._id) } }).select('qualifyingId').lean()).map((x) => String(x.qualifyingId))) : new Set();
+  res.json({ items: items.map((i) => ({ ...i.toObject(), rated: done.has(i.id) })) }); // rated: this person already reviewed the creator for it
 }));
 const moveReq = async (id, filter, from, to) => SpecialRequest.findOneAndUpdate({ _id: id, ...filter, status: { $in: from } }, { status: to }, { new: true });
 r.post('/requests/:id/:action', asyncHandler(async (req, res) => {

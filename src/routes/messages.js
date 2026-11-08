@@ -142,10 +142,11 @@ r.get('/conversations', asyncHandler(async (req, res) => {
   const pinnedIds = new Set(); const mineOnly = (c) => (c.pinnedBy || []).some((p) => String(p.userId) === String(me));
   if (cat !== 'archived') { const have = new Set(items.map((c) => String(c._id))); const extra = await Conversation.find({ ...q, 'pinnedBy.userId': me, _id: { $nin: [...have] } }).select('-__v').populate('participants', POP).lean(); items = items.concat(extra); }
   items.forEach((c) => mineOnly(c) && pinnedIds.add(String(c._id)));
+  const blockRows = await Block.find({ $or: [{ blockerId: me }, { blockedId: me }] }).select('blockerId blockedId').lean(); const blockOut = new Set(blockRows.filter((b) => String(b.blockerId) === String(me)).map((b) => String(b.blockedId))); const blockIn = new Set(blockRows.filter((b) => String(b.blockedId) === String(me)).map((b) => String(b.blockerId)));
   items.sort((a, b) => (Number(pinnedIds.has(String(b._id))) - Number(pinnedIds.has(String(a._id)))) || (new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0)));
   if (cat === 'creators') items = items.filter((c) => other(c, me)?.accountMode === 'CREATOR');
   if (cat === 'users') items = items.filter((c) => other(c, me)?.accountMode === 'USER');
-  res.json({ items: items.map((c) => { const o = { ...c }; const p = other(c, me); o.unreadCount = unreadOf(c, me); delete o.unread; o.pinned = pinnedIds.has(String(c._id)); delete o.pinnedBy; delete o.hiddenBy; o.myLabelIds = (c.labels || []).filter((l) => String(l.userId) === String(me)).map((l) => String(l.labelId)); delete o.labels; delete o.dmPaid; o.online = p?.prefs?.showOnline !== false && isOnline(p?._id); return o; }) });
+  res.json({ items: items.map((c) => { const o = { ...c }; const p = other(c, me); o.unreadCount = unreadOf(c, me); delete o.unread; o.pinned = pinnedIds.has(String(c._id)); { const x = other(c, me); const op = String(x?._id || x); o.blockedByMe = blockOut.has(op); o.blockedMe = blockIn.has(op); } delete o.pinnedBy; delete o.hiddenBy; o.myLabelIds = (c.labels || []).filter((l) => String(l.userId) === String(me)).map((l) => String(l.labelId)); delete o.labels; delete o.dmPaid; o.online = p?.prefs?.showOnline !== false && isOnline(p?._id); return o; }) });
 }));
 
 // Pay a creator's message fee once (subscribers never pay). After this you can message them freely.
@@ -181,7 +182,8 @@ r.get('/:conversationId', asyncHandler(async (req, res) => {
   const before = req.query.before ? new Date(String(req.query.before)) : null;
   const rows = await Message.find({ conversationId: c._id, deletedFor: { $ne: req.user._id }, ...(before && !isNaN(before) ? { createdAt: { $lt: before } } : {}) }).sort('-createdAt').limit(41).lean();
   const hasMore = rows.length > 40; if (hasMore) rows.pop(); rows.reverse(); // newest 40, oldest first
-  res.json({ messages: rows.map((m) => shapeMsg(m, req.user._id)), accepted: c.accepted, hasMore });
+  const otherId = other(c, req.user._id); const bl = await Block.find({ $or: [{ blockerId: req.user._id, blockedId: otherId }, { blockerId: otherId, blockedId: req.user._id }] }).select('blockerId').lean();
+  res.json({ messages: rows.map((m) => shapeMsg(m, req.user._id)), accepted: c.accepted, hasMore, blockedByMe: bl.some((b) => String(b.blockerId) === req.user.id), blockedMe: bl.some((b) => String(b.blockerId) !== req.user.id) });
 }));
 
 const send = z.object({ toUserId: z.string(), text: z.string().min(1).max(4000), clientId: z.string().optional(), replyTo: z.string().optional() });
@@ -318,6 +320,8 @@ r.post('/delete-all', asyncHandler(async (req, res) => { // registered before '/
   const ids = (await Conversation.find({ participants: req.user._id, hiddenBy: { $ne: req.user._id } }).select('_id').lean()).map((c) => c._id);
   await wipeFor(ids, req.user._id); res.json({ ok: true, count: ids.length });
 }));
+// ---- clear chat: empties the conversation for me but keeps it in my list
+r.post('/:id/clear', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await Message.updateMany({ conversationId: c._id }, { $addToSet: { deletedFor: req.user._id } }); await Conversation.updateOne({ _id: c._id }, { $set: { [`unread.${req.user.id}`]: 0 } }); res.json({ ok: true }); }));
 r.post('/:id/delete', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await wipeFor([c._id], req.user._id); res.json({ ok: true }); }));
 r.post('/:id/unarchive', asyncHandler(async (req, res) => { const c = await convFor(req.params.id, req.user._id); await Conversation.updateOne({ _id: c._id }, { $pull: { archivedBy: req.user._id } }); res.json({ ok: true }); }));
 
