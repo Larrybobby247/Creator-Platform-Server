@@ -32,6 +32,22 @@ export function makeBlurPreview(file, isVideo, durationSec = 0) {
     p.on('close', (c) => { const b = Buffer.concat(chunks); resolve(c === 0 && b.length > 100 && b.length < 20000 ? `data:image/jpeg;base64,${b.toString('base64')}` : null); });
   });
 }
+/** Cut a video to [start, end] seconds (the person chose the part they want in the app). Re-encodes to MP4 so the cut is frame-accurate.
+ *  Returns the new temp file path (the caller owns and deletes it), or null when no valid trim was asked for. */
+export function parseTrim(body = {}) {
+  const s = Number(body.trimStart), e = Number(body.trimEnd);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || s < 0 || e - s < 0.5 || e > 60 * 60 * 3) return null;
+  return { start: s, end: e };
+}
+export function trimVideo(file, { start, end }) {
+  return new Promise((resolve, reject) => {
+    const out = `${file}.trim.mp4`;
+    const args = ['-v', 'error', '-y', '-ss', String(start), '-i', file, '-t', String(end - start), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', out];
+    let p; try { p = spawn(process.env.FFMPEG_PATH || 'ffmpeg', args); } catch { return reject(new ApiError(503, 'Video editing is unavailable right now')); }
+    p.on('error', () => reject(new ApiError(503, 'Video editing is unavailable right now')));
+    p.on('close', (c) => (c === 0 ? resolve(out) : reject(new ApiError(422, 'Could not trim this video. Try another file or post it untrimmed.'))));
+  });
+}
 export async function assertVideoAllowed(file, plan, maxOverride) {
   const limits = await getSetting('videoLimitSec');
   const max = Math.min(maxOverride ?? Infinity, limits[plan] ?? limits.DEFAULT);
