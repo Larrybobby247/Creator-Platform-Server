@@ -78,6 +78,8 @@ r.get('/feed', asyncHandler(async (req, res) => {
   const q = { ...VISIBLE, authorId: { $nin: blocked } };
   const author = req.query.author && /^[0-9a-f]{24}$/i.test(req.query.author) ? req.query.author : null;
   if (author) q.authorId = author;
+  // Reels (short videos) have their own feed: they never mix into the home feed or a profile's Posts tab.
+  if (req.query.kind === 'REEL') q.kind = 'REEL'; else q.kind = { $ne: 'REEL' };
   if (req.query.community) { await assertCommunityView(req.query.community, req.user); q.communityId = req.query.community; }
   else if (tab === 'communities') q.communityId = { $in: memberRows.map((m) => m.communityId) };
   else if (!author) q.communityId = { $exists: false };

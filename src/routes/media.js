@@ -79,6 +79,9 @@ r.post('/posts', authenticate, asyncHandler(async (req, res) => {
       if (it.access === 'EXCLUSIVE') await priceOk(it.pricePoints);
       const a = A[it.mediaId]; media.push({ mediaId: a._id, mediaType: a.mediaType, access: it.access, pricePoints: it.access === 'EXCLUSIVE' ? it.pricePoints : 0, durationSec: a.durationSec });
     }
+    const isReel = req.body.kind === 'REEL';
+    if (isReel && (media.length !== 1 || media[0].mediaType !== 'VIDEO')) throw new ApiError(400, 'A reel is one video', 'REEL_NEEDS_ONE_VIDEO');
+    if (isReel && media[0].access !== 'PUBLIC') throw new ApiError(400, 'Reels are free for everyone to watch', 'REEL_IS_PUBLIC');
     const gated = media.filter((m) => m.access !== 'PUBLIC').length;
     const svc = req.user.services || {}; // services the creator switched off in Settings stay off
     if (media.some((m) => m.access !== 'PUBLIC' && m.mediaType === 'IMAGE') && svc.paidPhotos?.enabled === false) throw new ApiError(403, 'Paid photos are switched off. Turn them on in Settings → Creator services.', 'SERVICE_OFF');
@@ -86,7 +89,7 @@ r.post('/posts', authenticate, asyncHandler(async (req, res) => {
     await checkPostRules(req.user, { access: 'PUBLIC', unlockPricePoints: 0, gatedItems: gated });
     if (exclusiveText && !gated) throw new ApiError(400, 'Protected text needs at least one exclusive or subscriber-only item');
     const mentions = await resolveMentions(caption, req.user._id);
-    const post = await Post.create({ authorId: req.user._id, content: caption, media, mentions, coverUrl, access: 'PUBLIC', exclusiveText: gated ? exclusiveText : undefined, mediaTypeHint: media[0].mediaType, status: draft ? 'DRAFT' : 'PUBLISHED' });
+    const post = await Post.create({ authorId: req.user._id, content: caption, media, mentions, coverUrl, access: 'PUBLIC', exclusiveText: gated ? exclusiveText : undefined, mediaTypeHint: media[0].mediaType, kind: isReel ? 'REEL' : 'POST', status: draft ? 'DRAFT' : 'PUBLISHED' });
     if (!draft) await notifyMentions(mentions, req.user, 'in a post', '/home');
     return res.status(201).json(post);
   }
