@@ -14,6 +14,8 @@ const postSchema = new Schema({
   unlockPricePoints: { type: Number, default: 0 }, exclusiveText: String, communityId: { type: Schema.Types.ObjectId, ref: 'Community' }, demo: Boolean,
   status: { type: String, enum: ['DRAFT','PUBLISHED','DELETED'], default: 'DRAFT' }, mediaTypeHint: String,
   tags: [String], pinnedAt: Date, viewCount: { type: Number, default: 0 },
+  // POST = a normal feed post. REEL = one short vertical video that lives in Explore (the shorts feed) and in the Reels tab of the author's profile.
+  kind: { type: String, enum: ['POST', 'REEL'], default: 'POST', index: true },
   // Up to 4 media items (max 2 videos). Each item has its own access: PUBLIC (free), EXCLUSIVE (pay per item) or SUBSCRIBERS.
   // Legacy single-media posts (mediaId + post.access) keep working: they are presented as one item.
   media: [{ _id: false, mediaId: { type: Schema.Types.ObjectId, ref: 'MediaAsset' }, mediaType: { type: String, enum: ['IMAGE', 'VIDEO'] }, access: { type: String, enum: ['PUBLIC', 'EXCLUSIVE', 'SUBSCRIBERS'], default: 'PUBLIC' }, pricePoints: { type: Number, default: 0 }, durationSec: Number }],
