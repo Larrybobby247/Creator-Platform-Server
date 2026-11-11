@@ -39,7 +39,38 @@ app.use((req, res, next) => { // timing: Server-Timing header on every response 
 });
 // Safe default for API responses: never cached by browsers/proxies (they are per-user). Public endpoints opt in below.
 app.use('/api', (_q, res, next) => { res.set('Cache-Control', 'private, no-store'); res.vary('Cookie'); next(); });
-app.use(cors({ origin: [env.frontendUrl, env.adminUrl], credentials: true }));
+const allowedOrigins = [
+  env.frontendUrl,
+  env.adminUrl
+]
+  .filter(Boolean)
+  .map(origin => origin.replace(/\/$/, ""));
+
+app.use(cors({
+  origin(origin, callback) {
+    // Allow requests without an Origin header (health checks, server requests).
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(
+      new Error("Origin not allowed by CORS")
+    );
+  },
+  credentials: true,
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS"
+  ],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization"
+  ]
+}));
 app.use(cookieParser());
 app.use('/uploads', express.static(env.publicDir, { maxAge: '365d', immutable: true, index: false })); // random file names => safe to cache forever
 app.get('/api/health', (_q, res) => res.json({ ok: true }));
