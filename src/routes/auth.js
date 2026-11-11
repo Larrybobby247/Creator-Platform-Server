@@ -17,10 +17,10 @@ const r = Router();
 const sign = (u) => jwt.sign({ sub: u.id }, env.jwtSecret, { expiresIn: '7d' });
 const cookie = {
   httpOnly: true,
-  sameSite: env.prod ? 'none' : 'lax',
   secure: env.prod,
-  maxAge: 8 * 3600e3,
-  path: '/'
+  sameSite: env.prod ? "lax" : "lax",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: "/"
 };
 
 export const pub = (u) => ({ id: u.id, username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl, accountMode: u.accountMode, creatorPlan: u.creatorPlan, role: u.role, referralCode: u.referralCode });
@@ -108,7 +108,19 @@ r.post('/reset', asyncHandler(async (req, res) => {
   if (!u) throw new ApiError(400, 'This reset link is invalid or has expired');
   u.passwordHash = await bcrypt.hash(b.password, 12); u.resetHash = undefined; u.resetExpires = undefined; await u.save(); res.json({ ok: true });
 }));
-r.post('/logout', (_q, res) => res.clearCookie('token').json({ ok: true }));
+r.post("/logout", (_req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    secure: env.prod,
+    sameSite: "lax",
+    path: "/"
+  });
+
+  return res.status(200).json({
+    ok: true,
+    message: "Logged out successfully"
+  });
+});
 r.get('/me', authenticate, (req, res) => res.json({ user: pub(req.user) }));
 r.get('/config', (_q, res) => { res.set('Cache-Control', 'public, max-age=300'); res.json({ googleClientId: env.googleClientId, termsVersion: TERMS_VERSION, paymentProvider: env.paymentProvider }); });
 export default r;
