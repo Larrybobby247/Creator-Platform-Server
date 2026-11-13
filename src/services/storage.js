@@ -60,7 +60,7 @@ export async function storePublicImage(tmpPath, ext) {
 /** Streams a stored asset to an Express response, honouring Range (needed for video seeking). */
 export async function sendStored(req, res, asset) {
   const key = asset.storageKey || '';
-  if (!isCloudKey(key)) return res.type(asset.mimeType).sendFile(path.resolve(env.mediaDir, key)); // sendFile handles Range
+  if (!isCloudKey(key)) return res.type(asset.mimeType).sendFile(path.resolve(env.mediaDir, key), { cacheControl: !res.getHeader('Cache-Control') }); // sendFile handles Range
   if (!env.cloudinaryEnabled) throw new ApiError(503, 'Media storage is not configured');
   const c = await sdk(); const [, rt, ...rest] = key.split('/'); const publicId = rest.join('/');
   const url = c.url(publicId, { resource_type: rt, type: 'authenticated', sign_url: true, secure: true });
@@ -68,7 +68,7 @@ export async function sendStored(req, res, asset) {
   if (!up.ok && up.status !== 206) throw new ApiError(404, 'Media not found');
   res.status(up.status); res.setHeader('Content-Type', asset.mimeType || up.headers.get('content-type') || 'application/octet-stream');
   for (const h of ['content-length', 'content-range', 'accept-ranges']) { const v = up.headers.get(h); if (v) res.setHeader(h, v); }
-  res.setHeader('Cache-Control', 'private, max-age=300');
+  if (!res.getHeader('Cache-Control')) res.setHeader('Cache-Control', 'private, max-age=300');
   if (!up.body) return res.end();
   const stream = Readable.fromWeb(up.body); req.on('close', () => stream.destroy()); stream.on('error', () => res.end()); stream.pipe(res);
 }

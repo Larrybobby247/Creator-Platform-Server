@@ -56,14 +56,16 @@ export async function assertVideoAllowed(file, plan, maxOverride) {
   return dur;
 }
 export { storePrivate } from './storage.js'; // Cloudinary (authenticated) in production, local private folder as dev fallback
-export const signUrl = (assetId, userId, ttlSec = 300) => {
+// `locked: true` marks paid / subscriber-only media (exclusive content). Its link is served as inline-only, never cached, and refuses to open as a page
+// or download (see the /:id/stream route). The flag is part of the signature, so nobody can strip it off the link to get a downloadable copy.
+export const signUrl = (assetId, userId, ttlSec = 300, locked = false) => {
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
-  const sig = crypto.createHmac('sha256', env.mediaSecret).update(`${assetId}.${userId}.${exp}`).digest('hex');
-  return `${env.backendUrl}/api/media/${assetId}/stream?uid=${userId}&exp=${exp}&sig=${sig}`;
+  const sig = crypto.createHmac('sha256', env.mediaSecret).update(`${assetId}.${userId}.${exp}${locked ? '.x' : ''}`).digest('hex');
+  return `${env.backendUrl}/api/media/${assetId}/stream?uid=${userId}&exp=${exp}&sig=${sig}${locked ? '&x=1' : ''}`;
 };
-export function verifySig(assetId, uid, exp, sig) {
+export function verifySig(assetId, uid, exp, sig, locked = false) {
   if (Number(exp) < Date.now() / 1000) return false;
-  const h = crypto.createHmac('sha256', env.mediaSecret).update(`${assetId}.${uid}.${exp}`).digest('hex');
+  const h = crypto.createHmac('sha256', env.mediaSecret).update(`${assetId}.${uid}.${exp}${locked ? '.x' : ''}`).digest('hex');
   const s = String(sig);
   return h.length === s.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(s));
 }

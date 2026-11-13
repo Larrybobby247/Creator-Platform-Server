@@ -2,6 +2,18 @@
 import { env } from '../config/env.js';
 import { ApiError } from '../utils/ApiError.js';
 import * as provider from './paymentProvider.js';
+import crypto from 'crypto';
+
+// The full account number is kept encrypted (AES-256-GCM) so an admin can send the money by hand. It is never returned to creators or in lists.
+const acctKey = () => crypto.createHash('sha256').update(`payout-account:${env.mediaSecret}`).digest();
+export function encryptAccount(plain) {
+  const iv = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', acctKey(), iv);
+  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return [iv, c.getAuthTag(), enc].map((b) => b.toString('base64')).join('.');
+}
+export function decryptAccount(token) {
+  try { const [iv, tag, enc] = String(token || '').split('.').map((x) => Buffer.from(x, 'base64')); const d = crypto.createDecipheriv('aes-256-gcm', acctKey(), iv); d.setAuthTag(tag); return Buffer.concat([d.update(enc), d.final()]).toString('utf8'); } catch { return null; }
+}
 
 let cache = { at: 0, banks: [] };
 export async function listBanks() {
@@ -28,7 +40,7 @@ export async function saveVerifiedAccount(user, { bankCode, bankName, accountNum
   if (!sameName(accountName, confirmedName)) throw new ApiError(409, 'The account name changed. Please verify it again.', 'NAME_MISMATCH');
   let recipientCode;
   if (env.paymentProvider === 'paystack') recipientCode = (await provider.createRecipient({ name: accountName, accountNumber, bankCode })).recipient_code;
-  user.payoutAccount = { bankName, bankCode, accountLast4: accountNumber.slice(-4), accountName, recipientCode, verifiedAt: new Date() };
+  user.payoutAccount = { bankName, bankCode, accountLast4: accountNumber.slice(-4), accountName, recipientCode, verifiedAt: new Date(), accountNumberEnc: encryptAccount(accountNumber) };
   await user.save();
   return maskedAccount(user);
 }
