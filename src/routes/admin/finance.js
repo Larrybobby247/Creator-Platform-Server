@@ -16,6 +16,7 @@ import { credit_ } from '../../jobs/helpers.js';
 import { earningsSummary } from '../studio.js';
 import { env } from '../../config/env.js';
 import * as provider from '../../services/paymentProvider.js';
+import { decryptAccount } from '../../services/bank.js';
 
 const r = Router();
 const reason = z.string().trim().min(5, 'Please give a reason (at least 5 characters)').max(500);
@@ -82,9 +83,18 @@ r.get('/payouts', need('payouts.read'), asyncHandler(async (req, res) => {
   res.json({ ...out, summary: Object.fromEntries(sums.map((s) => [s._id, { count: s.n, naira: s.naira }])), paidInPeriodNaira: period[0]?.naira || 0 });
 }));
 r.get('/payouts/:id', need('payouts.read'), asyncHandler(async (req, res) => {
-  const p = await Payout.findById(req.params.id).populate('creatorId', 'username displayName email').lean(); if (!p) throw new ApiError(404, 'Not found');
+  const p = await Payout.findById(req.params.id).select('+accountNumberEnc').populate('creatorId', 'username displayName email').lean(); if (!p) throw new ApiError(404, 'Not found');
+  const { accountNumberEnc, ...rest } = p; const accountNumber = accountNumberEnc ? decryptAccount(accountNumberEnc) : null;
   const [summary, history] = await Promise.all([earningsSummary(p.creatorId._id), Payout.find({ creatorId: p.creatorId._id, _id: { $ne: p._id } }).sort('-createdAt').limit(10).select('nairaAmount status createdAt reference').lean()]);
-  res.json({ payout: { ...p, accountMasked: `${p.bankName} ••••${p.accountLast4}`, automated: !!p.recipientCode }, creatorEarnings: summary, history }); // full account numbers are never stored
+  res.json({ payout: { ...rest, accountMasked: `${p.bankName} ••••${p.accountLast4}`, automated: !!p.recipientCode }, creatorEarnings: summary, history }); // the full account number is only shown in the send-transfer screen (see /payouts/:id/transfer-details)
+}));
+// Everything needed to send the money by hand: full account number, account name and bank. Needs the review permission and every look is audit-logged.
+r.get('/payouts/:id/transfer-details', need('payouts.review'), asyncHandler(async (req, res) => {
+  const p = await Payout.findById(req.params.id).select('+accountNumberEnc').populate('creatorId', 'username displayName').lean(); if (!p) throw new ApiError(404, 'Not found');
+  if (!['PENDING', 'PROCESSING'].includes(p.status)) throw new ApiError(409, 'This payout is already settled');
+  const accountNumber = p.accountNumberEnc ? decryptAccount(p.accountNumberEnc) : null;
+  await audit(req, 'PAYOUT_ACCOUNT_VIEWED', p.id, { meta: { naira: p.nairaAmount } });
+  res.json({ reference: p.reference, creator: p.creatorId?.username, nairaAmount: p.nairaAmount, bankName: p.bankName, accountName: p.accountName, accountNumber, accountLast4: p.accountLast4, missingNumber: !accountNumber });
 }));
 r.post('/payouts/:id/send', need('payouts.review'), asyncHandler(async (req, res) => {
   const p = await Payout.findById(req.params.id); if (!p || p.status !== 'PENDING') throw new ApiError(409, 'Only pending payouts can be sent');
@@ -96,7 +106,7 @@ r.post('/payouts/:id/send', need('payouts.review'), asyncHandler(async (req, res
 }));
 // Manual payouts: only after the transfer really happened, with the bank's reference. Automatic transfers are completed by the provider webhook only.
 r.post('/payouts/:id/mark-paid', need('payouts.review'), asyncHandler(async (req, res) => {
-  const b = z.object({ providerReference: z.string().trim().min(4).max(80) }).parse(req.body); const p0 = await Payout.findById(req.params.id); if (!p0) throw new ApiError(404, 'Not found');
+  const b = z.object({ providerReference: z.string().trim().min(4).max(80).optional() }).parse(req.body || {}); const p0 = await Payout.findById(req.params.id); if (!p0) throw new ApiError(404, 'Not found'); b.providerReference = b.providerReference || `MANUAL-${p0.reference}`; // "I've sent the money" needs no reference
   if (p0.transferCode) throw new ApiError(409, 'This payout is awaiting confirmation from the payment provider. It cannot be marked paid manually.');
   const p = await Payout.findOneAndUpdate({ _id: p0._id, status: { $in: ['PENDING', 'PROCESSING'] } }, { status: 'PAID', providerReference: b.providerReference }, { new: true }); if (!p) throw new ApiError(409, 'Invalid state');
   await audit(req, 'PAYOUT_MARKED_PAID', p.id, { meta: { providerReference: b.providerReference, naira: p.nairaAmount } }); await notify(p.creatorId, 'PAYOUT', `Your withdrawal of ₦${p.nairaAmount.toLocaleString()} has been paid`, '/studio'); res.json({ ok: true });

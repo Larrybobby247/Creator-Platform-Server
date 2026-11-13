@@ -20,14 +20,14 @@ const r = Router();
 const pos = z.number().int().positive(), nn = z.number().int().min(0), pair = (s) => z.object({ DEFAULT: s, PRO: s });
 const SCHEMAS = {
   platform: z.object({ name: z.string().trim().min(2).max(40), tagline: z.string().trim().max(120), supportEmail: z.string().email(), logoUrl: z.string().max(300).optional().default(''), currency: z.literal('NGN'), timezone: z.string().min(3).max(60) }),
-  nairaPerPoint: pos, commissionBps: z.number().int().min(0).max(10000), proCommissionBps: z.number().int().min(0).max(10000), maxPurchasePoints: pos, minPayoutPoints: pos, verificationFeeKobo: nn,
+  usdPerPoint: z.number().positive().max(1000), usdToNgn: pos, commissionBps: z.number().int().min(0).max(10000), proCommissionBps: z.number().int().min(0).max(10000), maxPurchasePoints: pos, minPayoutPoints: pos, verificationFeeKobo: nn,
   videoLimitSec: pair(pos), maxUploadBytes: pos, previewMaxSec: pos, voiceMaxSec: pos,
   planLimits: z.object({ exclusivePostsPerMonth: pair(nn), pinnedPosts: z.object({ USER: nn, DEFAULT: nn, PRO: nn }), advancedAnalytics: pair(z.boolean()) }),
   promoPrices: z.object({ DAY1: pos, DAY3: pos, DAY7: pos }), referralBps: z.number().int().min(0).max(10000), referralDays: pos, referralHoldDays: nn,
   meetupDisputeHours: nn, meetupRequestExpiryHours: pos, proPricePoints: pos, proDays: pos,
 };
-const GROUPS = { General: ['platform'], 'Pricing and fees': ['nairaPerPoint', 'commissionBps', 'proCommissionBps', 'maxPurchasePoints', 'minPayoutPoints', 'proPricePoints', 'proDays', 'planLimits', 'promoPrices', 'verificationFeeKobo'], Content: ['videoLimitSec', 'maxUploadBytes', 'previewMaxSec', 'voiceMaxSec'], Referrals: ['referralBps', 'referralDays', 'referralHoldDays'], Meetups: ['meetupDisputeHours', 'meetupRequestExpiryHours'] };
-const HIGH_IMPACT = new Set(['nairaPerPoint', 'commissionBps', 'proCommissionBps', 'proCommissionBps', 'maxPurchasePoints', 'planLimits']);
+const GROUPS = { General: ['platform'], 'Pricing and fees': ['usdPerPoint', 'usdToNgn', 'commissionBps', 'proCommissionBps', 'maxPurchasePoints', 'minPayoutPoints', 'proPricePoints', 'proDays', 'planLimits', 'promoPrices', 'verificationFeeKobo'], Content: ['videoLimitSec', 'maxUploadBytes', 'previewMaxSec', 'voiceMaxSec'], Referrals: ['referralBps', 'referralDays', 'referralHoldDays'], Meetups: ['meetupDisputeHours', 'meetupRequestExpiryHours'] };
+const HIGH_IMPACT = new Set(['usdPerPoint', 'usdToNgn', 'commissionBps', 'proCommissionBps', 'proCommissionBps', 'maxPurchasePoints', 'planLimits']);
 
 r.get('/settings', need('settings.read'), asyncHandler(async (_q, res) => { const values = {}; for (const k of Object.keys(SCHEMAS)) values[k] = await getSetting(k); res.json({ values, groups: GROUPS, highImpact: [...HIGH_IMPACT] }); }));
 r.put('/settings/:key', need('settings.manage'), asyncHandler(async (req, res) => {
