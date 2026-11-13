@@ -26,7 +26,7 @@ const s = new mongoose.Schema({
   // Which paid features the creator switched on. Each can be turned on later; none is forced. { key: { enabled, pricePoints? } }
   services: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Verified payout bank account. The full number goes only to the payment provider; we keep the last 4 digits and the provider's recipient code.
-  payoutAccount: { bankName: String, bankCode: String, accountLast4: String, accountName: String, recipientCode: String, verifiedAt: Date },
+  payoutAccount: { bankName: String, bankCode: String, accountLast4: String, accountName: String, recipientCode: String, verifiedAt: Date, accountNumberEnc: { type: String, select: false } }, // accountNumberEnc: the full number, encrypted; only ever read by the payout flow
   showGiftSenders: { type: Boolean, default: false },
   referralCode: { type: String, unique: true, sparse: true },
   referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
