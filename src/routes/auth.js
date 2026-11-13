@@ -23,7 +23,7 @@ const cookie = {
   path: "/"
 };
 
-export const pub = (u) => ({ id: u.id, username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl, accountMode: u.accountMode, creatorPlan: u.creatorPlan, role: u.role, referralCode: u.referralCode });
+export const pub = (u) => ({ id: u.id, username: u.username, displayName: u.displayName, avatarUrl: u.avatarUrl, gender: u.gender, accountMode: u.accountMode, creatorPlan: u.creatorPlan, role: u.role, referralCode: u.referralCode });
 
 async function createUser({ username, email, passwordHash, ref, googleId, displayName, gender, age, emailVerified = false }) {
   const referrer = ref ? await User.findOne({ referralCode: ref }) : null;

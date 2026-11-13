@@ -17,8 +17,8 @@ import { isIdentityVerified } from '../services/verification.js';
 const r = Router();
 r.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please slow down.', code: 'RATE_LIMITED' } }));
 const oid = (s) => /^[0-9a-f]{24}$/i.test(String(s));
-const FIELDS = 'username displayName bio avatarUrl coverUrl creatorPlan category location accountMode subscriptionPricePoints creatorSince services requestSettings.enabled requestSettings.minPricePoints meetup.enabled prefs.showOnline';
-const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan subscriptionPricePoints';
+const FIELDS = 'username displayName bio avatarUrl gender coverUrl creatorPlan category location accountMode subscriptionPricePoints creatorSince services requestSettings.enabled requestSettings.minPricePoints meetup.enabled prefs.showOnline';
+const AUTHOR = 'username displayName avatarUrl gender accountMode creatorPlan subscriptionPricePoints';
 const VISIBLE = { status: 'PUBLISHED', 'moderation.status': { $nin: ['REMOVED', 'RESTRICTED'] } };
 const findUser = async (idOrName) => {
   const u = await User.findOne({ $or: [{ _id: oid(idOrName) ? idOrName : null }, { username: String(idOrName).toLowerCase() }], accountStatus: { $ne: 'SUSPENDED' }, emailVerified: { $ne: false } }).select(FIELDS);
@@ -47,6 +47,13 @@ r.get('/profile/:id/posts', asyncHandler(async (req, res) => {
   res.json({ posts, nextCursor: more && last ? `${last.createdAt.toISOString()}_${last._id}` : null });
 }));
 
+// One free post (used by shared video links). Locked items come back marked locked and are never served.
+r.get('/posts/:id', asyncHandler(async (req, res) => {
+  const p = oid(req.params.id) ? await Post.findOne({ _id: req.params.id, ...VISIBLE, access: 'PUBLIC', communityId: { $exists: false } }).select('-__v').populate('authorId', AUTHOR).lean() : null;
+  if (!p || p.authorId?.accountStatus === 'SUSPENDED') throw new ApiError(404, 'Not found');
+  const [post] = await shape([p], stranger()); const { exclusiveText, ...pub } = post; res.json({ post: pub });
+}));
+
 // Link for ONE free media item of a public post. Locked items are never served here.
 r.get('/posts/:id/media/:idx', asyncHandler(async (req, res) => {
   const p = oid(req.params.id) ? await Post.findOne({ _id: req.params.id, ...VISIBLE, access: 'PUBLIC', communityId: { $exists: false } }) : null; const idx = Number(req.params.idx);
@@ -59,9 +66,9 @@ r.get('/posts/:id/media/:idx', asyncHandler(async (req, res) => {
 
 r.get('/community/:id', asyncHandler(async (req, res) => {
   if (!oid(req.params.id)) throw new ApiError(400, 'Bad id');
-  const c = await Community.findById(req.params.id).populate('ownerId', 'username displayName avatarUrl').select('name description rules visibility memberCount accessFeePoints status ownerId allowPosting allowMedia createdAt').lean();
+  const c = await Community.findById(req.params.id).populate('ownerId', 'username displayName avatarUrl gender').select('name description rules visibility memberCount accessFeePoints status ownerId allowPosting allowMedia createdAt').lean();
   if (!c || c.status === 'RESTRICTED' || c.visibility !== 'PUBLIC') throw new ApiError(404, 'Not found'); // private communities are never shown to strangers
-  const members = await CommunityMember.find({ communityId: c._id }).limit(12).populate('userId', 'username displayName avatarUrl').lean();
+  const members = await CommunityMember.find({ communityId: c._id }).limit(12).populate('userId', 'username displayName avatarUrl gender').lean();
   res.json({ community: c, members: members.map((m) => m.userId).filter(Boolean) });
 }));
 export default r;

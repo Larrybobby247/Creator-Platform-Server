@@ -136,7 +136,7 @@ r.get('/conversations', asyncHandler(async (req, res) => {
     const subs = await Subscription.find({ creatorId: me, status: 'ACTIVE', expiresAt: { $gt: new Date() } }).select('subscriberId').lean(); q.$and = [{ participants: { $in: subs.map((s) => s.subscriberId) } }];
   }
   if (cat.startsWith('label:')) { const id = cat.slice(6); if (!/^[0-9a-f]{24}$/i.test(id)) return res.json({ items: [] }); q.labels = { $elemMatch: { userId: me, labelId: id } }; }
-  const POP = 'username displayName avatarUrl accountMode prefs';
+  const POP = 'username displayName avatarUrl gender accountMode prefs';
   let items = await Conversation.find(q).sort('-lastMessageAt').limit(50).select('-__v').populate('participants', POP).lean();
   // Pinned chats always make the list, even if they are older than the 50 newest, and sit on top.
   const pinnedIds = new Set(); const mineOnly = (c) => (c.pinnedBy || []).some((p) => String(p.userId) === String(me));
@@ -240,7 +240,7 @@ r.get('/message/:messageId/media', asyncHandler(async (req, res) => {
   const m = await Message.findById(req.params.messageId); if (!m?.mediaId || m.deletedForAll || (m.deletedFor || []).some((x) => String(x) === req.user.id)) throw new ApiError(404, 'Not found');
   await convFor(m.conversationId, req.user._id);
   const s = shapeMsg(m, req.user._id); if (s.locked) throw new ApiError(403, 'Locked', 'LOCKED');
-  res.json({ url: signUrl(m.mediaId, req.user.id, 300) });
+  res.json({ url: signUrl(m.mediaId, req.user.id, 300, m.price > 0) });
 }));
 r.post('/message/:messageId/react', asyncHandler(async (req, res) => {
   const { emoji } = z.object({ emoji: z.string().min(1).max(32).refine((e) => ONE_EMOJI.test(e), 'Pick a single emoji') }).parse(req.body);

@@ -98,7 +98,7 @@ export const settle = async (reference) => (await settleDetailed(reference)).tx;
 r.use(authenticate);
 r.get('/wallet', asyncHandler(async (req, res) => {
   const w = (await Wallet.findOne({ userId: req.user._id })) || { availablePoints: 0, reservedPoints: 0 };
-  res.json({ availablePoints: w.availablePoints, reservedPoints: w.reservedPoints, nairaPerPoint: await getSetting('nairaPerPoint'), packages: await packagesList(), maxPurchasePoints: await getSetting('maxPurchasePoints') });
+  res.json({ availablePoints: w.availablePoints, reservedPoints: w.reservedPoints, nairaPerPoint: await getSetting('nairaPerPoint'), usdPerPoint: await getSetting('usdPerPoint'), usdToNgn: await getSetting('usdToNgn'), packages: await packagesList(), maxPurchasePoints: await getSetting('maxPurchasePoints') });
 }));
 r.get('/transactions', asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);

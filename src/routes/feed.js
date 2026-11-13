@@ -16,7 +16,7 @@ r.use(authenticate);
 const PAGE = 20;
 const VISIBLE = { status: 'PUBLISHED', 'moderation.status': { $nin: ['REMOVED', 'RESTRICTED'] } };
 const cursorFilter = (c) => { if (!c) return null; const [t, id] = String(c).split('_'); const d = new Date(t); if (isNaN(d) || !/^[0-9a-f]{24}$/i.test(id || '')) return null; return { $or: [{ createdAt: { $lt: d } }, { createdAt: d, _id: { $lt: id } }] }; };
-const AUTHOR = 'username displayName avatarUrl accountMode creatorPlan subscriptionPricePoints';
+const AUTHOR = 'username displayName avatarUrl gender accountMode creatorPlan subscriptionPricePoints';
 
 // Shape posts for the viewer. Protected text/media is NEVER included unless entitled.
 // All lookups run once for the whole page (no per-post queries) and concurrently.
@@ -124,7 +124,7 @@ r.post('/posts/:id/like', asyncHandler(async (req, res) => {
 }));
 
 // ---------- comments (threaded one level, with likes) ----------
-const CU = 'username displayName avatarUrl accountMode';
+const CU = 'username displayName avatarUrl gender accountMode';
 const canSee = async (user, post) => { const { hasAccess } = await import('../services/access.js'); return !!post && post.status === 'PUBLISHED' && await hasAccess(user, post); };
 async function shapeComments(rows, me, postAuthorId) {
   const liked = new Set((await CommentLike.find({ commentId: { $in: rows.map((c) => c._id) }, userId: me._id }).select('commentId').lean()).map((x) => String(x.commentId)));
@@ -190,7 +190,7 @@ r.get('/explore', asyncHandler(async (req, res) => {
   if (req.query.category) q.category = String(req.query.category).slice(0, 30);
   const term = String(req.query.q || '').replace(/[^\w ]/g, '').slice(0, 40);
   if (term) q.$or = [{ username: new RegExp(`^${term}`, 'i') }, { displayName: new RegExp(term, 'i') }];
-  const creators = await User.find(q).sort({ _id: -1 }).skip(page * SIZE).limit(SIZE + 1).select('username displayName bio avatarUrl category creatorPlan accountMode').lean();
+  const creators = await User.find(q).sort({ _id: -1 }).skip(page * SIZE).limit(SIZE + 1).select('username displayName bio avatarUrl gender category creatorPlan accountMode').lean();
   const more = creators.length > SIZE; if (more) creators.pop();
   const ids = creators.map((c) => c._id);
   const [follows, counts, rt, promoted] = await Promise.all([

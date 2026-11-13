@@ -43,7 +43,7 @@ r.patch('/me/dm', requireCreator, asyncHandler(async (req, res) => {
 // Your own followers / following (so you can follow back or unfollow).
 const listPeople = (dir) => asyncHandler(async (req, res) => {
   const me = req.user._id; const mine = dir === 'following'; const q = mine ? { followerId: me } : { followeeId: me }; const SIZE = 30; const page = Math.max(0, Number(req.query.page) || 0);
-  const rows = await Follow.find(q).sort('-createdAt').skip(page * SIZE).limit(SIZE + 1).populate(mine ? 'followeeId' : 'followerId', 'username displayName avatarUrl accountMode creatorPlan').lean();
+  const rows = await Follow.find(q).sort('-createdAt').skip(page * SIZE).limit(SIZE + 1).populate(mine ? 'followeeId' : 'followerId', 'username displayName avatarUrl gender accountMode creatorPlan').lean();
   const more = rows.length > SIZE; if (more) rows.pop(); const users = rows.map((x) => (mine ? x.followeeId : x.followerId)).filter(Boolean);
   const back = mine ? new Set(users.map((u) => String(u._id))) : new Set((await Follow.find({ followerId: me, followeeId: { $in: users.map((u) => u._id) } }).select('followeeId').lean()).map((x) => String(x.followeeId)));
   res.json({ users: users.map((u) => ({ ...u, following: back.has(String(u._id)) })), hasMore: more, total: await Follow.countDocuments(q) });
@@ -59,7 +59,7 @@ r.put('/me/password', asyncHandler(async (req, res) => {
   u.passwordHash = await bcrypt.hash(b.next, 12); await u.save(); res.json({ ok: true });
 }));
 
-r.get('/blocks', asyncHandler(async (req, res) => res.json({ items: await Block.find({ blockerId: req.user._id }).populate('blockedId', 'username displayName avatarUrl') })));
+r.get('/blocks', asyncHandler(async (req, res) => res.json({ items: await Block.find({ blockerId: req.user._id }).populate('blockedId', 'username displayName avatarUrl gender') })));
 r.delete('/block/:userId', asyncHandler(async (req, res) => { await Block.deleteOne({ blockerId: req.user._id, blockedId: req.params.userId }); res.json({ ok: true }); }));
 
 // ---- Web push

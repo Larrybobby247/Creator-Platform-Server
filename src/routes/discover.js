@@ -8,7 +8,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 const r = Router();
 r.use(authenticate);
 const esc = (s) => String(s).replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40);
-const U = 'username displayName avatarUrl accountMode creatorPlan bio category';
+const U = 'username displayName avatarUrl gender accountMode creatorPlan bio category';
 const cache = new Map(); // public, non-personal data only; short TTL
 const cached = async (key, ttlMs, fn) => { const h = cache.get(key); if (h && Date.now() - h.at < ttlMs) return h.data; const data = await fn(); cache.set(key, { at: Date.now(), data }); return data; };
 

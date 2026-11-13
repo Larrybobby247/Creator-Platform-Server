@@ -117,7 +117,7 @@ r.patch('/meetup', requireCreator, asyncHandler(async (req, res) => {
 }));
 
 r.get('/:id', asyncHandler(async (req, res) => {
-  const u = await User.findOne({ $or: [{ _id: /^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : null }, { username: req.params.id.toLowerCase() }] }).select('username displayName bio avatarUrl coverUrl creatorPlan category location accountMode meetup.enabled meetup.pricePoints meetup.transportPoints meetup.area meetup.durationMin meetup.cancelRule subscriptionPricePoints dmPolicy.mode dmPolicy.pricePoints requestSettings creatorSince services prefs.showOnline');
+  const u = await User.findOne({ $or: [{ _id: /^[0-9a-f]{24}$/i.test(req.params.id) ? req.params.id : null }, { username: req.params.id.toLowerCase() }] }).select('username displayName bio avatarUrl gender coverUrl creatorPlan category location accountMode meetup.enabled meetup.pricePoints meetup.transportPoints meetup.area meetup.durationMin meetup.cancelRule subscriptionPricePoints dmPolicy.mode dmPolicy.pricePoints requestSettings creatorSince services prefs.showOnline');
   if (!u) throw new ApiError(404, 'Not found');
   const subscribers = u.accountMode === 'CREATOR' ? await Subscription.countDocuments({ creatorId: u._id, status: 'ACTIVE', expiresAt: { $gt: new Date() } }) : 0;
   const [followers, following, isFollowing, sub, rt] = await Promise.all([
@@ -138,7 +138,7 @@ r.get('/:id/gifts', asyncHandler(async (req, res) => {
   const agg = await GiftTransaction.aggregate([{ $match: { recipientId: c._id, status: 'COMPLETED' } }, { $group: { _id: '$giftId', quantity: { $sum: '$quantity' }, pointsSpent: { $sum: '$grossPoints' } } }]);
   const gifts = await Gift.find({ _id: { $in: agg.map((a) => a._id) } });
   const out = { items: agg.map((a) => ({ gift: a._id ? (() => { const g = gifts.find((x) => x.id === String(a._id)); return g && { ...(g.toObject ? g.toObject() : g), icon: iconOf(g.name) }; })() : { _id: 'custom', name: 'Custom gift', icon: CUSTOM_ICON }, quantity: a.quantity, pointsSpent: a.pointsSpent })) }; // custom gifts have no catalogue entry (giftId is empty)
-  if (c.showGiftSenders) out.recent = await GiftTransaction.find({ recipientId: c._id }).sort('-createdAt').limit(20).populate('senderId', 'username avatarUrl');
+  if (c.showGiftSenders) out.recent = await GiftTransaction.find({ recipientId: c._id }).sort('-createdAt').limit(20).populate('senderId', 'username avatarUrl gender');
   res.json(out);
 }));
 export default r;

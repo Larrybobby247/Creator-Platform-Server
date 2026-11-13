@@ -59,7 +59,7 @@ r.get('/advanced', asyncHandler(async (req, res) => {
   const active = new Map(); for (const x of [...likers, ...commenters]) active.set(String(x._id), (active.get(String(x._id)) || 0) + x.n);
   const activeTop = [...active.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
   const uids = [...new Set([...spend.map((s) => String(s._id)), ...activeTop.map((a) => a[0])])];
-  const users = Object.fromEntries((await User.find({ _id: { $in: uids } }).select('username displayName avatarUrl').lean()).map((u) => [String(u._id), u]));
+  const users = Object.fromEntries((await User.find({ _id: { $in: uids } }).select('username displayName avatarUrl gender').lean()).map((u) => [String(u._id), u]));
   const L = Object.fromEntries(likesPer.map((x) => [String(x._id), x.n])), C = Object.fromEntries(commentsPer.map((x) => [String(x._id), x.n])), P = Object.fromEntries(myPosts.map((p) => [String(p._id), p]));
   const popular = myPosts.map((p) => ({ _id: p._id, caption: (p.content || '').slice(0, 80), access: p.access, views: p.viewCount || 0, likes: L[String(p._id)] || 0, comments: C[String(p._id)] || 0 })).map((p) => ({ ...p, score: p.views + p.likes * 3 + p.comments * 5 })).sort((a, b) => b.score - a.score).slice(0, 5);
   const gmap = Object.fromEntries(growth.map((g) => [g._id, g.n])); const days = Array.from({ length: 30 }, (_, i) => { const k = new Date(since.getTime() + i * 864e5).toISOString().slice(0, 10); return { date: k, followers: gmap[k] || 0 }; });

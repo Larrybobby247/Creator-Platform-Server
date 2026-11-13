@@ -175,19 +175,24 @@ r.get('/posts/:id/media/:idx', authenticate, asyncHandler(async (req, res) => {
   const post = await visiblePost(req.params.id); const idx = Number(req.params.idx);
   if (!Number.isInteger(idx) || !post.media?.[idx]) throw new ApiError(404, 'Not found');
   if (!(await itemAllowed(req.user, post, idx))) throw new ApiError(403, 'Locked', 'LOCKED');
-  res.json({ url: signUrl(post.media[idx].mediaId, req.user.id, 300) });
+  res.json({ url: signUrl(post.media[idx].mediaId, req.user.id, 300, post.media[idx].access !== 'PUBLIC') });
 }));
 // Legacy single-media posts.
 r.get('/posts/:id/playback', authenticate, asyncHandler(async (req, res) => {
   const post = await Post.findById(req.params.id);
   if (!post?.mediaId || post.status !== 'PUBLISHED' || ['REMOVED', 'RESTRICTED'].includes(post.moderation?.status)) throw new ApiError(404, 'Not found');
   if (!(await hasAccess(req.user, post))) throw new ApiError(403, 'Locked', 'LOCKED');
-  res.json({ url: signUrl(post.mediaId, req.user.id, 300) });
+  res.json({ url: signUrl(post.mediaId, req.user.id, 300, post.access !== 'PUBLIC') });
 }));
 // The only way to read stored bytes: a per-user, expiring signature minted after an access check. Cloudinary itself is never exposed.
 r.get('/:id/stream', asyncHandler(async (req, res) => {
-  const { uid, exp, sig } = req.query;
-  if (!verifySig(req.params.id, uid, exp, sig)) throw new ApiError(403, 'Link expired');
+  const { uid, exp, sig } = req.query; const locked = req.query.x === '1';
+  if (!verifySig(req.params.id, uid, exp, sig, locked)) throw new ApiError(403, 'Link expired');
+  if (locked) { // exclusive media: only ever played inside the app (an <img>/<video> tag), never opened as a page, framed or saved from the address bar
+    const dest = String(req.headers['sec-fetch-dest'] || '');
+    if (['document', 'iframe', 'frame', 'embed', 'object'].includes(dest)) throw new ApiError(403, 'This content can only be viewed inside the app');
+    res.setHeader('Cache-Control', 'private, no-store'); res.setHeader('Content-Disposition', 'inline'); res.setHeader('X-Content-Type-Options', 'nosniff');
+  }
   const a = oid(req.params.id) && await MediaAsset.findById(req.params.id);
   if (!a) throw new ApiError(404, 'Not found');
   await sendStored(req, res, a);
