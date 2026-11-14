@@ -11,8 +11,11 @@ const call = async (path, opts = {}) => {
   if (!r.ok || !j.status) { console.error('[paystack]', path.split('?')[0], r.status, j.message || ''); throw Object.assign(new ApiError(502, 'Payment provider error'), { providerStatus: r.status, providerMessage: j.message || '' }); } // the reason shows in your server logs
   return j.data;
 };
-export const initialize = ({ email, amountKobo, reference, callbackUrl }) =>
-  call('/transaction/initialize', { method: 'POST', body: JSON.stringify({ email, amount: amountKobo, reference, callback_url: callbackUrl }) });
+export const initialize = ({ email, amountKobo, reference, callbackUrl }) => {
+  const body = { email, amount: Math.round(amountKobo), reference, currency: 'NGN' };
+  if (/^https?:\/\//i.test(callbackUrl || '')) body.callback_url = callbackUrl; // a missing FRONTEND_URL would make this "undefined/wallet..." and Paystack refuses the whole payment
+  return call('/transaction/initialize', { method: 'POST', body: JSON.stringify(body) });
+};
 export const verify = (reference) => call(`/transaction/verify/${encodeURIComponent(reference)}`);
 export function validSignature(rawBody, signature) {
   if (!signature || !env.paystackSecret) return false;
