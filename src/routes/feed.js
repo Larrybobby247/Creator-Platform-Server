@@ -187,10 +187,10 @@ r.post('/report', asyncHandler(async (req, res) => {
 r.get('/explore', asyncHandler(async (req, res) => {
   const page = Math.max(0, Number(req.query.page) || 0), SIZE = 24;
   const q = { accountMode: 'CREATOR', accountStatus: { $ne: 'SUSPENDED' }, _id: { $ne: req.user._id } };
-  if (req.query.category) q.category = String(req.query.category).slice(0, 30);
+  if (req.query.category) { const cat = String(req.query.category).slice(0, 30); q.$and = [{ $or: [{ category: cat }, { categories: cat }] }]; } // a creator can be in several categories
   const term = String(req.query.q || '').replace(/[^\w ]/g, '').slice(0, 40);
   if (term) q.$or = [{ username: new RegExp(`^${term}`, 'i') }, { displayName: new RegExp(term, 'i') }];
-  const creators = await User.find(q).sort({ _id: -1 }).skip(page * SIZE).limit(SIZE + 1).select('username displayName bio avatarUrl gender category creatorPlan accountMode').lean();
+  const creators = await User.find(q).sort({ _id: -1 }).skip(page * SIZE).limit(SIZE + 1).select('username displayName bio avatarUrl gender category categories creatorPlan accountMode').lean();
   const more = creators.length > SIZE; if (more) creators.pop();
   const ids = creators.map((c) => c._id);
   const [follows, counts, rt, promoted] = await Promise.all([

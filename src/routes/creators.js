@@ -36,7 +36,7 @@ const guidelines = (c1, c2) => [
 ];
 r.get('/application/meta', asyncHandler(async (req, res) => {
   const [c1, c2] = await Promise.all([getSetting('commissionBps'), getSetting('proCommissionBps')]);
-  res.json({ alreadyCreator: req.user.accountMode === 'CREATOR', country: 'Nigeria', categories: ['Personal content'], guidelinesVersion: GUIDELINES_VERSION, guidelines: guidelines(c1, c2), commissionBps: c1, proCommissionBps: c2,
+  res.json({ alreadyCreator: req.user.accountMode === 'CREATOR', country: 'Nigeria', categories: CREATOR_CATEGORIES, guidelinesVersion: GUIDELINES_VERSION, guidelines: guidelines(c1, c2), commissionBps: c1, proCommissionBps: c2,
     services: [['paidPhotos', 'Paid photos'], ['paidVideos', 'Paid videos'], ['promotions', 'Creator promotions'], ['specialRequests', 'Special requests'], ['paidCommunities', 'Paid communities'], ['paidVoice', 'Paid voice messages'], ['tipsGifts', 'Tips and gifts'], ['subscriptions', 'Monthly subscriptions'], ['innerCircle', 'Innercircle']].map(([key, label]) => ({ key, label, priced: PRICED.has(key) })) });
 }));
 r.get('/application/banks', asyncHandler(async (_q, res) => res.json(await listBanks())));
@@ -61,11 +61,13 @@ async function applyServices(user, svc) {
   }
   user.markModified('services');
 }
+// The categories a creator can pick (any number of them). Explore filters by the same names.
+export const CREATOR_CATEGORIES = ['Personal', 'Music', 'Comedy', 'Fashion', 'Fitness', 'Food', 'Tech', 'Art', 'Travel'];
 const normPhone = (p) => p.replace(/[\s-]/g, '').replace(/^\+234/, '0');
 r.post('/apply', asyncHandler(async (req, res) => {
   if (req.user.accountMode === 'CREATOR') throw new ApiError(409, 'You are already a creator');
   const b = z.object({
-    contentCategory: z.literal('Personal content'), country: z.literal('Nigeria'),
+    contentCategories: z.array(z.enum(CREATOR_CATEGORIES)).min(1, 'Choose at least one category').max(CREATOR_CATEGORIES.length).transform((a) => [...new Set(a)]), country: z.literal('Nigeria'),
     legalName: z.string().trim().min(5, 'Enter your full legal name').max(100).refine((n) => n.split(/\s+/).length >= 2, 'Enter your first and last name'),
     dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Enter your date of birth'), phone: z.string().refine((p) => /^0[789][01]\d{8}$/.test(normPhone(p)), 'Enter a valid Nigerian phone number'),
     acceptGuidelines: z.literal(true, { errorMap: () => ({ message: 'You must accept the content guidelines' }) }), guidelinesVersion: z.string(),
@@ -79,8 +81,8 @@ r.post('/apply', asyncHandler(async (req, res) => {
   if (env.paymentProvider === 'paystack' && !namesOverlap(b.legalName, holder)) throw new ApiError(422, 'The name on this bank account does not match your legal name. Use an account in your own name.', 'NAME_MISMATCH');
   await applyServices(req.user, b.services);
   await saveVerifiedAccount(req.user, b.bank); // re-verifies the name, registers the recipient, saves it (last 4 digits only)
-  req.user.creatorApplication = { legalName: b.legalName, dob, phone: normPhone(b.phone), country: b.country, contentCategory: b.contentCategory, guidelinesAcceptedAt: new Date(), guidelinesVersion: GUIDELINES_VERSION, submittedAt: new Date() };
-  req.user.category = 'Personal'; if (b.displayName) req.user.displayName = b.displayName; if (b.bio) req.user.bio = b.bio;
+  req.user.creatorApplication = { legalName: b.legalName, dob, phone: normPhone(b.phone), country: b.country, contentCategory: b.contentCategories.join(', '), contentCategories: b.contentCategories, guidelinesAcceptedAt: new Date(), guidelinesVersion: GUIDELINES_VERSION, submittedAt: new Date() };
+  req.user.category = b.contentCategories[0]; req.user.categories = b.contentCategories; if (b.displayName) req.user.displayName = b.displayName; if (b.bio) req.user.bio = b.bio;
   req.user.accountMode = 'CREATOR'; req.user.creatorSince ||= new Date(); await req.user.save();
   await notify(req.user._id, 'CREATOR', 'Your creator account is ready. Welcome!', '/studio');
   res.status(201).json({ ok: true });

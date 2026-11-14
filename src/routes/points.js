@@ -114,7 +114,13 @@ r.post('/purchase', asyncHandler(async (req, res) => {
   const reference = `pp${crypto.randomBytes(10).toString('hex')}`; // letters and numbers only: the only characters Paystack accepts in a transaction reference (besides - . =)
   const tx = await createPendingCredit({ userId: req.user._id, type: 'POINT_PURCHASE', amount: points, nairaAmount: naira, idempotencyKey: `purchase:${reference}`, meta: { bonus } });
   if (env.paymentProvider === 'mock') return res.json({ mock: true, reference, points, naira }); // dev only; refused in production
-  const init = await paystack.initialize({ email: req.user.email, amountKobo: nairaToKobo(naira), reference, callbackUrl: `${env.frontendUrl}/wallet?ref=${reference}` });
+  let init;
+  try { init = await paystack.initialize({ email: req.user.email, amountKobo: nairaToKobo(naira), reference, callbackUrl: env.frontendUrl ? `${String(env.frontendUrl).replace(/\/+$/, '')}/wallet?ref=${reference}` : '' }); }
+  catch (e) { // the attempt never reached the provider: close it so it does not sit as "pending", and say something useful instead of "Server error"
+    await PointTransaction.updateOne({ _id: tx._id, status: 'PENDING' }, { status: 'FAILED' });
+    if (e.status === 503 || e.providerStatus === 401) throw new ApiError(503, 'Card payments are not set up yet. Please contact support.');
+    throw new ApiError(502, "We couldn't start your payment. Please try again in a moment.");
+  }
   res.json({ authorizationUrl: init.authorization_url, reference, transactionId: tx.id, points, naira });
 }));
 // DEV ONLY: simulates the provider confirming a payment. Disabled unless PAYMENT_PROVIDER=mock outside production.
