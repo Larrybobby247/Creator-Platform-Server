@@ -63,7 +63,11 @@ export async function settleDetailed(reference) {
   const mine = String(tx.idempotencyKey).replace(/^purchase:/, '');
   let v; try { ({ v } = await verifyAny([mine, reference, clean(mine)])); } catch (e) {
     console.error('[points] could not verify', mine, e.providerStatus || '', e.providerMessage || e.message);
-    return { tx, reason: e.providerStatus === 404 ? 'NOT_FOUND' : e.providerStatus === 401 ? 'BAD_KEY' : 'VERIFY_ERROR', detail: e.providerMessage || e.message };
+    // Paystack answers 400 "Transaction reference not found" for a payment it never received (the attempt failed before reaching it). Those can never be paid,
+    // so after 30 minutes close them instead of re-checking every minute for a week.
+    const notFound = e.providerStatus === 404 || /not found/i.test(e.providerMessage || '');
+    if (notFound && Date.now() - new Date(tx.createdAt).getTime() > 30 * 60e3) { tx.status = 'FAILED'; await tx.save(); return { tx, reason: null }; }
+    return { tx, reason: notFound ? 'NOT_FOUND' : e.providerStatus === 401 ? 'BAD_KEY' : 'VERIFY_ERROR', detail: e.providerMessage || e.message };
   }
   if (v.status === 'success') {
     const expected = Math.round(nairaToKobo(tx.nairaAmount));
