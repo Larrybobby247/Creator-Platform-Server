@@ -4,7 +4,8 @@ export const recentErrors = []; // last 20 server errors (path + message only) f
 export function errorHandler(err, req, res, _next) {
   if (err instanceof ZodError) return res.status(400).json({ error: 'Validation failed', details: err.issues });
   const status = err.status || 500;
-  if (status >= 500) { console.error(err.message); recentErrors.unshift({ at: new Date(), path: req.path, message: String(err.message).slice(0, 200) }); recentErrors.length = Math.min(recentErrors.length, 20); }
+  // the first stack lines go to the log, so it shows WHERE something broke
+  if (status >= 500) { console.error(err.stack ? String(err.stack).split('\n').slice(0, 4).join(' | ') : err.message); recentErrors.unshift({ at: new Date(), path: req.path, message: String(err.message).slice(0, 200) }); recentErrors.length = Math.min(recentErrors.length, 20); }
   // messages we wrote ourselves (ApiError) are safe to show; unexpected crashes stay generic
   res.status(status).json({ error: status >= 500 && !err.code && !(err instanceof ApiError) ? 'Server error' : err.message, code: err.code, attemptsLeft: err.attemptsLeft, extra: err.extra });
 }
