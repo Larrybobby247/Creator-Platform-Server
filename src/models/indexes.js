@@ -31,6 +31,7 @@ export const INDEXES = [
   [Follow, { followeeId: 1, createdAt: -1 }, 'follower counts and audience list'],
   [Comment, { postId: 1, createdAt: -1 }, 'comments on a post'],
   [User, { accountMode: 1, category: 1, _id: -1 }, 'explore filtered by category'],
+  [User, { accountMode: 1, categories: 1, _id: -1 }, 'explore filtered by any of a creator\'s categories'],
   [User, { referredBy: 1 }, 'referral dashboard'],
   [User, { creatorPlan: 1, proExpiresAt: 1 }, 'Pro expiry job'],
   [User, { emailVerifyHash: 1 }, 'email verification lookup', { sparse: true }],

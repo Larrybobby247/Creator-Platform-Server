@@ -11,7 +11,7 @@ const s = new mongoose.Schema({
   subscriptionPricePoints: { type: Number, default: 0 },
   meetupEnabled: { type: Boolean, default: false },
   termsAcceptedAt: Date, termsVersion: String, googleId: { type: String, sparse: true, unique: true },
-  demo: { type: Boolean, default: false }, category: String, location: String,
+  demo: { type: Boolean, default: false }, category: String, categories: { type: [String], default: undefined }, location: String,
   meetup: { enabled: { type: Boolean, default: false }, pricePoints: { type: Number, default: 0 }, transportPoints: { type: Number, default: 0 }, durationMin: { type: Number, default: 60 }, area: String, noticeHours: { type: Number, default: 24 }, cancelRule: String },
   prefs: { messages: { type: String, enum: ['EVERYONE','REQUESTS'], default: 'EVERYONE' }, showOnline: { type: Boolean, default: true }, emailNotifs: { type: Boolean, default: true }, push: { type: Boolean, default: false }, promoNotifs: { type: Boolean, default: true } },
   emailVerified: { type: Boolean, default: false }, emailVerifyHash: String, emailVerifyExpires: Date, emailVerifySentAt: Date,
@@ -22,7 +22,7 @@ const s = new mongoose.Schema({
   adminNotes: [{ text: String, by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, at: Date }],
   proExpiresAt: Date, profileViews: { type: Number, default: 0 },
   // Creator application (private: legal name / date of birth / phone are for verification only and are never returned by public endpoints)
-  creatorApplication: { type: new mongoose.Schema({ legalName: String, dob: Date, phone: String, country: { type: String, default: 'Nigeria' }, contentCategory: String, guidelinesAcceptedAt: Date, guidelinesVersion: String, submittedAt: Date }, { _id: false }), select: false },
+  creatorApplication: { type: new mongoose.Schema({ legalName: String, dob: Date, phone: String, country: { type: String, default: 'Nigeria' }, contentCategory: String, contentCategories: [String], guidelinesAcceptedAt: Date, guidelinesVersion: String, submittedAt: Date }, { _id: false }), select: false },
   // Which paid features the creator switched on. Each can be turned on later; none is forced. { key: { enabled, pricePoints? } }
   services: { type: mongoose.Schema.Types.Mixed, default: {} },
   // Verified payout bank account. The full number goes only to the payment provider; we keep the last 4 digits and the provider's recipient code.
